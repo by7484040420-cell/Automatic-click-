@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">BIPIN Clicker</string>
+    <string name="accessibility_service_description">
+        Ye service screen par likhe naam, fal ya sector dhundh kar khud click karti hai jo aapne app me save kiye hain.
+    </string>
+</resources>
