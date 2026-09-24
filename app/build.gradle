@@ -11,8 +11,13 @@ android {
         applicationId "com.bipin.clicker"
         minSdk 24
         targetSdk 34
+<<<<<<< HEAD
+        versionCode 1
+        versionName "1.0"
+=======
         versionCode 3
         versionName "1.2"
+>>>>>>> FETCH_HEAD
     }
 
     buildTypes {
@@ -40,4 +45,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+<<<<<<< HEAD
+    implementation 'com.google.android.gms:play-services-ads:23.0.0'
+=======
+>>>>>>> FETCH_HEAD
 }
