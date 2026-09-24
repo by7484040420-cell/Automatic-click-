@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<<<<<<< HEAD
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -10,20 +9,10 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-=======
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
->>>>>>> FETCH_HEAD
         android:orientation="vertical"
         android:padding="16dp">
 
         <TextView
-<<<<<<< HEAD
             android:id="@+id/areaSummaryText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -35,24 +24,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Pickup / Drop Area Set Karein" />
-=======
-            android:id="@+id/statusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="14sp"
-            android:paddingBottom="8dp" />
-
-        <Button
-            android:id="@+id/btnEnableService"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Accessibility Service ON Karein" />
->>>>>>> FETCH_HEAD
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-<<<<<<< HEAD
             android:text="Aane Wale Orders (sirf wahi dikhenge jo match karein):"
             android:textStyle="bold"
             android:layout_marginTop="16dp" />
@@ -81,102 +56,3 @@
         app:adUnitId="ca-app-pub-3940256099942544/6300978111" />
 
 </LinearLayout>
-=======
-            android:text="Pickup → Drop Auto Click"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:layout_marginTop="18dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Pickup aur Drop ek hi ride/card me dono match hone par hi click hoga. &quot;all delhi&quot; ka matlab Delhi ki koi bhi location; isi tarah all noida, all ghaziabad, all gurugram. Dono conditions AND hain."
-            android:textSize="13sp"
-            android:layout_marginTop="4dp" />
-
-        <EditText
-            android:id="@+id/editPickup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Pickup: Nehru Place ya all delhi / all noida / all gurugram"
-            android:singleLine="true"
-            android:layout_marginTop="10dp" />
-
-        <EditText
-            android:id="@+id/editDrop"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Drop: Gurgaon Sector 3 ya all delhi / all noida / all ghaziabad"
-            android:singleLine="true"
-            android:layout_marginTop="6dp" />
-
-        <Switch
-            android:id="@+id/switchPickupDrop"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Pickup/Drop mode"
-            android:checked="false"
-            android:enabled="false" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btnSavePickupDrop"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="START" />
-
-            <Button
-                android:id="@+id/btnStopPickupDrop"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="STOP" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingTop="16dp">
-
-            <EditText
-                android:id="@+id/editWord"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Extra target word" />
-
-            <Button
-                android:id="@+id/btnAdd"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Add" />
-        </LinearLayout>
-
-        <Button
-            android:id="@+id/btnLoadLocations"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Sab Locations Load Karein" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Saved Words (normal click mode):"
-            android:layout_marginTop="16dp"
-            android:textStyle="bold" />
-
-        <ListView
-            android:id="@+id/listWords"
-            android:layout_width="match_parent"
-            android:layout_height="300dp" />
-
-    </LinearLayout>
-</ScrollView>
->>>>>>> FETCH_HEAD
