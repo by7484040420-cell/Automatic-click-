@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<<<<<<< HEAD
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+=======
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
@@ -6,10 +18,24 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+>>>>>>> FETCH_HEAD
         android:orientation="vertical"
         android:padding="16dp">
 
         <TextView
+<<<<<<< HEAD
+            android:id="@+id/areaSummaryText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:paddingBottom="8dp" />
+
+        <Button
+            android:id="@+id/btnSetArea"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pickup / Drop Area Set Karein" />
+=======
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -21,10 +47,41 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Accessibility Service ON Karein" />
+>>>>>>> FETCH_HEAD
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+<<<<<<< HEAD
+            android:text="Aane Wale Orders (sirf wahi dikhenge jo match karein):"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp" />
+
+        <ListView
+            android:id="@+id/listOrders"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <Button
+            android:id="@+id/btnRefresh"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Naye Orders Dekhein (Refresh)" />
+
+    </LinearLayout>
+
+    <com.google.android.gms.ads.AdView
+        android:id="@+id/adView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        app:adSize="BANNER"
+        app:adUnitId="ca-app-pub-3940256099942544/6300978111" />
+
+</LinearLayout>
+=======
             android:text="Pickup → Drop Auto Click"
             android:textSize="18sp"
             android:textStyle="bold"
@@ -122,3 +179,4 @@
 
     </LinearLayout>
 </ScrollView>
+>>>>>>> FETCH_HEAD
