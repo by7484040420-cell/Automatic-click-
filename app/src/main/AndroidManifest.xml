@@ -1,12 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+<<<<<<< HEAD
+    <uses-permission android:name="android.permission.INTERNET" />
+
+=======
+>>>>>>> FETCH_HEAD
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
         android:theme="@style/Theme.BipinClicker"
         android:supportsRtl="true">
 
+<<<<<<< HEAD
+        <!-- Google's public TEST AdMob App ID - replace with your real AdMob App ID before publishing -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
+
+=======
+>>>>>>> FETCH_HEAD
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -16,6 +29,12 @@
             </intent-filter>
         </activity>
 
+<<<<<<< HEAD
+        <activity
+            android:name=".AreaPreferenceActivity"
+            android:exported="false"
+            android:label="Pickup / Drop Set Karein" />
+=======
         <service
             android:name=".ClickerAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
@@ -27,6 +46,7 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+>>>>>>> FETCH_HEAD
 
     </application>
 </manifest>
