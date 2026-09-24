@@ -5,10 +5,6 @@ pluginManagement {
         gradlePluginPortal()
     }
 }
-<<<<<<< HEAD
-=======
-
->>>>>>> FETCH_HEAD
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
@@ -16,11 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-<<<<<<< HEAD
 rootProject.name = "BipinClicker"
 include ':app'
-=======
-
-rootProject.name = "BipinClicker"
-include(":app")
->>>>>>> FETCH_HEAD
