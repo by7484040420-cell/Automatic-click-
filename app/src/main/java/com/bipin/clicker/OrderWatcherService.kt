@@ -4,9 +4,12 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 
 /**
  * Ye service HAR app ke upar kaam karti hai (kisi ek app tak limited nahi hai), aur
@@ -79,6 +82,10 @@ class OrderWatcherService : AccessibilityService() {
                         lastClickTime = now
                         Log.d(TAG, "Auto-clicked matching order in ${event.packageName}")
                     }
+                    showDebugToast(
+                        if (clicked) "BipinClicker: Order match mila, accept try kiya"
+                        else "BipinClicker: Order match mila, par button nahi mila"
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -87,6 +94,12 @@ class OrderWatcherService : AccessibilityService() {
     }
 
     /** Screen ke saare text nodes ek list me jama karta hai. */
+    private fun showDebugToast(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun collectText(node: AccessibilityNodeInfo?, out: MutableList<String>) {
         if (node == null) return
         val text = node.text?.toString()
