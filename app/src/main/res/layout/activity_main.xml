@@ -25,6 +25,13 @@
             android:layout_height="wrap_content"
             android:text="Pickup / Drop Area Set Karein" />
 
+        <Button
+            android:id="@+id/btnEnableService"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Auto-Click Service ON Karein (Accessibility)" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
