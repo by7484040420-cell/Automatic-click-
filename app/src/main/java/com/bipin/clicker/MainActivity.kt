@@ -2,6 +2,7 @@ package com.bipin.clicker
 
 import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -27,6 +28,15 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnSetArea.setOnClickListener {
             startActivity(Intent(this, AreaPreferenceActivity::class.java))
+        }
+
+        binding.btnEnableService.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            Toast.makeText(
+                this,
+                "List me 'BIPIN Clicker' dhoondh kar ON karein",
+                Toast.LENGTH_LONG
+            ).show()
         }
 
         binding.btnRefresh.setOnClickListener {
@@ -56,11 +66,22 @@ class MainActivity : AppCompatActivity() {
      */
     private fun generateSampleOrders(): List<Order> {
         if (allEntries.size < 2) return emptyList()
+        val cities = allEntries.map { it.city }.distinct()
+        if (cities.size < 2) return emptyList()
+
+        fun randomEntryForCity(city: String): LocationEntry =
+            allEntries.filter { it.city == city }.random()
+
         val orders = mutableListOf<Order>()
-        for (i in 1..15) {
-            val pickup = allEntries.random()
-            val drop = allEntries.random()
-            val item = itemSamples.random()
+
+        // Har city (chhoti ho ya badi) ko barabar chance milta hai - pehle Noida/Gurugram
+        // jaise bade city (zyada sectors) hi zyada aate the, chhoti city ka order kabhi
+        // aata hi nahi tha.
+        for (i in 1..30) {
+            val pickupCity = cities.random()
+            val dropCity = cities.random()
+            val pickup = randomEntryForCity(pickupCity)
+            val drop = randomEntryForCity(dropCity)
             orders.add(
                 Order(
                     id = "ORD$i",
@@ -68,10 +89,31 @@ class MainActivity : AppCompatActivity() {
                     pickupArea = pickup.label,
                     dropCity = drop.city,
                     dropArea = drop.label,
-                    itemInfo = item
+                    itemInfo = itemSamples.random()
                 )
             )
         }
+
+        // Agar rider ne apna pickup/drop area set kar rakha hai, to demo me har baar
+        // kam se kam ek matching order zaroor dikhे - taaki refresh karte hi pata chale
+        // ki auto-accept kaam kar raha hai. (Real backend jodte waqt ye hata dena.)
+        val myPickupCities = AreaPrefs.getPickupCities(this)
+        val myDropCities = AreaPrefs.getDropCities(this)
+        if (myPickupCities.isNotEmpty() && myDropCities.isNotEmpty()) {
+            val guaranteedPickup = randomEntryForCity(myPickupCities.random())
+            val guaranteedDrop = randomEntryForCity(myDropCities.random())
+            orders.add(
+                Order(
+                    id = "ORDX",
+                    pickupCity = guaranteedPickup.city,
+                    pickupArea = guaranteedPickup.label,
+                    dropCity = guaranteedDrop.city,
+                    dropArea = guaranteedDrop.label,
+                    itemInfo = itemSamples.random()
+                )
+            )
+        }
+
         return orders
     }
 
