@@ -2,8 +2,12 @@ package com.bipin.clicker
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -39,10 +43,48 @@ class OrderWatcherService : AccessibilityService() {
 
         // Ek hi screen par baar-baar click na ho isliye chhota sa gap rakha hai.
         private const val CLICK_COOLDOWN_MS = 3000L
+
+        private const val CHANNEL_ID = "bipin_clicker_status"
+        private const val NOTIFICATION_ID = 501
     }
 
     private var lastClickTime = 0L
     private var lastClickedSignature: String? = null
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        showOnNotification()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        val nm = getSystemService(NotificationManager::class.java)
+        nm?.cancel(NOTIFICATION_ID)
+    }
+
+    /** Status bar me ek chhota persistent icon dikhata hai jab tak service chal rahi hai. */
+    private fun showOnNotification() {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "BIPIN Clicker Status",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            nm.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_service_on)
+            .setContentTitle("BIPIN Clicker: ON")
+            .setContentText("Auto-Accept chal raha hai")
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        nm.notify(NOTIFICATION_ID, notification)
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
