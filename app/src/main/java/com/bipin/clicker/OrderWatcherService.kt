@@ -165,8 +165,10 @@ class OrderWatcherService : AccessibilityService() {
 
     /**
      * Pehle node khud (ya upar wale clickable parent) par TAP try karta hai.
-     * Agar tap kaam na kare (jaise "slide to accept" button), to left-se-right
-     * SWIPE gesture try karta hai.
+     * Agar tap kaam na kare (jaise "slide to accept" button), to us button ke
+     * SABSE CHAUDE parent container (asli slider bar) par left-se-right SWIPE
+     * try karta hai - chhote text label ke bounds par swipe karne se slider
+     * trigger nahi hota, isliye poore container ka width use karte hain.
      */
     private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
@@ -174,14 +176,36 @@ class OrderWatcherService : AccessibilityService() {
         while (current != null && depth < 6) {
             if (current.isClickable) {
                 if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-                return swipeAcrossNode(current)
+                break
             }
             current = current.parent
             depth++
         }
-        // Kabhi-kabhi button khud clickable flag nahi rakhta, tab bhi uske apne
-        // bounds par seedha swipe try kar lete hain.
-        return swipeAcrossNode(node)
+        return swipeAcrossNode(widestAncestor(node))
+    }
+
+    /** Node se upar tak (max 5 level) jaake sabse zyada chaude bounds wala ancestor dhoondhta hai. */
+    private fun widestAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var best = node
+        var bestWidth = boundsWidth(node)
+        var current: AccessibilityNodeInfo? = node.parent
+        var depth = 0
+        while (current != null && depth < 5) {
+            val w = boundsWidth(current)
+            if (w > bestWidth) {
+                bestWidth = w
+                best = current
+            }
+            current = current.parent
+            depth++
+        }
+        return best
+    }
+
+    private fun boundsWidth(node: AccessibilityNodeInfo): Int {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return r.width()
     }
 
     /** Node ke bounds par left-se-right ek swipe/drag gesture karta hai ("slide to accept" ke liye). */
