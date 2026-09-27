@@ -107,26 +107,37 @@ object AreaPrefs {
     }
 
     private fun selectionsMatchText(selections: Map<String, Set<String>>, normalizedText: String): Boolean {
+        val compactText = normalizedText.replace(" ", "")
+
         for ((city, localities) in selections) {
             val cityNorm = normalize(city)
             if (cityNorm.isEmpty()) continue
 
-            // Sirf exact city naam nahi, uske common purane/alternate naam (Gurgaon,
-            // New Delhi, etc.) bhi check karo - order screen par jo bhi likha ho.
             val cityVariants = cityAliases(cityNorm)
-            if (cityVariants.none { normalizedText.contains(it) }) continue
+            val cityMatched = cityVariants.any { variant ->
+                normalizedText.contains(variant) || compactText.contains(variant.replace(" ", ""))
+            }
 
-            if (localities.contains(ALL_MARKER)) return true
+            // "All <city>" = city milte hi match. Kuch delivery apps city ko
+            // address ki alag line me dikhati hain, isliye compact form bhi check karo.
+            if (localities.contains(ALL_MARKER)) {
+                if (cityMatched) return true
+                continue
+            }
 
+            // Specific locality: pehle city + locality dono try karo.
+            // Agar delivery app city ko Accessibility text me expose hi nahi karti,
+            // to selected locality ko akela bhi accept karo. Isse "Order not match"
+            // unnecessarily nahi aayega jab locality clearly screen par hai.
             for (locality in localities) {
                 val localityNorm = normalize(locality)
                 if (localityNorm.isEmpty()) continue
+                val localityCompact = localityNorm.replace(" ", "")
+                val localityMatched = normalizedText.contains(localityNorm) ||
+                    compactText.contains(localityCompact)
 
-                // Delivery apps kabhi locality ko alag formatting me dikhate hain,
-                // jaise "Sector-5", "Sector 5", "sector5" ya punctuation ke saath.
-                // Isliye normal form ke saath compact form bhi compare karo.
-                if (normalizedText.contains(localityNorm) ||
-                    compact(normalizedText).contains(compact(localityNorm))) return true
+                if (cityMatched && localityMatched) return true
+                if (localityMatched) return true
             }
         }
         return false
@@ -144,14 +155,7 @@ object AreaPrefs {
         CITY_ALIASES[normalizedCity] ?: listOf(normalizedCity)
 
     private fun normalize(s: String): String =
-        s.trim()
-            .lowercase()
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-            .replace(Regex("\\s+"), " ")
-
-    /** Spaces/hyphens/punctuation hata kar address variants ko compare karne ke liye. */
-    private fun compact(s: String): String =
-        s.filter { it.isLetterOrDigit() }
+        s.trim().lowercase().replace(Regex("\\s+"), " ")
 
     // ---------- internal JSON helpers ----------
 
