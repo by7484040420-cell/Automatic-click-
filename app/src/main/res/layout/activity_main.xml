@@ -32,25 +32,12 @@
             android:layout_marginTop="8dp"
             android:text="Auto-Click Service ON Karein (Accessibility)" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Aane Wale Orders (sirf wahi dikhenge jo match karein):"
-            android:textStyle="bold"
-            android:layout_marginTop="16dp" />
-
-        <ListView
-            android:id="@+id/listOrders"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
-
         <Button
-            android:id="@+id/btnRefresh"
+            android:id="@+id/btnFloatingBubble"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Naye Orders Dekhein (Refresh)" />
+            android:text="Floating Bubble ON Karein (Quick Pause/Resume)" />
 
     </LinearLayout>
 
