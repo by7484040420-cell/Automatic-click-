@@ -81,7 +81,13 @@ class OrderWatcherService : AccessibilityService() {
                 val screenText = texts.joinToString(" | ")
 
                 if (screenText.isBlank()) continue
-                if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) continue
+                if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) {
+                    DebugOverlay.update(
+                        applicationContext,
+                        "Scan (${root.packageName}):\n\"${screenText.take(150)}\"\n-> NOT match"
+                    )
+                    continue
+                }
 
                 setStatus("ORDER FOUND")
 
@@ -95,6 +101,7 @@ class OrderWatcherService : AccessibilityService() {
                         lastActionAt = now
                         setStatus("ORDER UTHA RAHA")
                         showDebugToast("Bipin Clicker: Order uthane ka action")
+                        DebugOverlay.update(applicationContext, "ORDER UTHA RAHA \u2705 (action bheja gaya)")
                     } else {
                         // The order card may appear before the slider becomes
                         // actionable. Poll rapidly for a few seconds.
@@ -158,9 +165,27 @@ class OrderWatcherService : AccessibilityService() {
 
         // Do NOT wait for "Accept in 5s". Try the live control now.
         // If it is disabled, the action fails and fast retry will try again.
+        //
+        // IMPORTANT: is button ka design (chhota circle + lamba pill + "Accept in Ns")
+        // ek SLIDE/DRAG control hai, simple tap-button nahi. Isliye SWIPE ko PEHLE
+        // try karo. Agar sirf click try karte, to Android kabhi-kabhi "click safal (true)"
+        // bol deta hai jabki Porter app ke andar asal me kuch hota hi nahi (slider sirf
+        // real drag/touch-move events sunta hai, synthetic click event nahi) - isse
+        // service ko lagta hai "ho gaya" jabki order abhi bhi waisa hi pada hai.
         if (isAcceptNode) {
-            if (clickNodeOrParent(node)) return true
-            if (swipeAcceptControl(node)) return true
+            val swiped = swipeAcceptControl(node)
+            DebugOverlay.update(
+                applicationContext,
+                "Accept word mila. Swipe try kiya -> dispatched=$swiped"
+            )
+            if (swiped) return true
+
+            val clicked = clickNodeOrParent(node)
+            DebugOverlay.update(
+                applicationContext,
+                "Swipe nahi ho paya, CLICK try kiya -> result=$clicked"
+            )
+            if (clicked) return true
         }
 
         for (i in 0 until node.childCount) {
@@ -216,24 +241,37 @@ class OrderWatcherService : AccessibilityService() {
 
         if (bounds.width() < 200 || bounds.height() < 40) return false
 
-        val y = bounds.centerY().toFloat()
+        // Agar andar hi koi chhota circle/thumb-jaisa child mile (roughly square,
+        // pill ke height ke barabar), to wahin se shuru karo - asli slider isi
+        // point par touch-down expect karta hai, sirf pill ke left edge par nahi.
+        val thumb = findThumbChild(target, bounds)
+        val y = (thumb?.centerY() ?: bounds.centerY()).toFloat()
         val radius = (bounds.height() * 0.43f).coerceAtLeast(22f)
-        val startX = bounds.left + radius
-        val endX = bounds.right - radius * 0.55f
+        val startX = (thumb?.centerX()?.toFloat()) ?: (bounds.left + radius)
+        // Poore right edge ke bahut kareeb tak jao (chhota sa margin), taaki
+        // slider ka "completion threshold" (aksar ~85-95%) paar ho jaaye.
+        val endX = bounds.right - (bounds.height() * 0.15f).coerceAtLeast(8f)
 
         if (endX <= startX + 30f) return false
 
+        // Seedha ek line ki jagah beech mein ek extra point daalo - real
+        // human drag jaisa lagta hai, kuch custom sliders sirf single straight
+        // jump ko "fling"/invalid samajh kar ignore kar dete hain.
+        val midX = startX + (endX - startX) * 0.5f
         val path = Path().apply {
             moveTo(startX, y)
+            lineTo(midX, y)
             lineTo(endX, y)
         }
 
+        // Duration thoda badhaya (180ms -> 380ms) - bahut tez synthetic swipe
+        // ko kuch sliders "invalid gesture" maan kar reject kar dete hain.
         val gesture = GestureDescription.Builder()
             .addStroke(
                 GestureDescription.StrokeDescription(
                     path,
                     0L,
-                    180L
+                    380L
                 )
             )
             .build()
@@ -252,8 +290,45 @@ class OrderWatcherService : AccessibilityService() {
             null
         )
 
-        Log.d(TAG, "Accept swipe dispatched=$dispatched bounds=$bounds")
+        Log.d(TAG, "Accept swipe dispatched=$dispatched bounds=$bounds startX=$startX endX=$endX")
+        DebugOverlay.update(
+            applicationContext,
+            "Swipe: bounds=$bounds\nstartX=${startX.toInt()} endX=${endX.toInt()} dispatched=$dispatched"
+        )
         return dispatched
+    }
+
+    /** Slider track ke andar ek chhota, lagbhag chौkore (square) child dhoondta hai - wahi asal "thumb"/drag handle hota hai. */
+    private fun findThumbChild(container: AccessibilityNodeInfo, containerBounds: Rect): Rect? {
+        var best: Rect? = null
+        var bestDiff = Int.MAX_VALUE
+
+        fun visit(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 4) return
+            val r = Rect()
+            try {
+                node.getBoundsInScreen(r)
+            } catch (_: Exception) {
+                return
+            }
+            if (r.width() in 30..containerBounds.height() * 2 &&
+                r.height() in 20..containerBounds.height() &&
+                r.left <= containerBounds.left + containerBounds.height()
+            ) {
+                val diff = kotlin.math.abs(r.width() - r.height())
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    best = Rect(r)
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val child = try { node.getChild(i) } catch (_: Exception) { null }
+                visit(child, depth + 1)
+            }
+        }
+
+        visit(container, 0)
+        return best
     }
 
     private fun findSliderLikeAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -351,6 +426,7 @@ class OrderWatcherService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         setStatus("OFF")
+        DebugOverlay.hide()
         getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
         super.onDestroy()
     }
