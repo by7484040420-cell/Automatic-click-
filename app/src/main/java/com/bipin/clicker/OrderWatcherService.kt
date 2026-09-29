@@ -1,6 +1,7 @@
 package com.bipin.clicker
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -62,7 +63,7 @@ class OrderWatcherService : AccessibilityService() {
         // SAHI SE mila hai ya nahi. Agar false hai to service chal to rahi hai
         // par touch kabhi nahi kar payegi.
         try {
-            val canGesture = serviceInfo?.canPerformGestures == true
+            val canGesture = ((serviceInfo?.capabilities ?: 0) and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
             val canRead = serviceInfo?.canRetrieveWindowContent == true
             reportDebug("Service connected.\ncanPerformGestures=$canGesture\ncanRetrieveWindowContent=$canRead")
             if (!canGesture) {
@@ -416,7 +417,7 @@ class OrderWatcherService : AccessibilityService() {
             .build()
 
         val canGesture = try {
-            serviceInfo?.canPerformGestures == true
+            ((serviceInfo?.capabilities ?: 0) and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
         } catch (_: Exception) {
             false
         }
