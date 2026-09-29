@@ -6,5 +6,6 @@
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
+    android:isAccessibilityTool="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_service_description" />
