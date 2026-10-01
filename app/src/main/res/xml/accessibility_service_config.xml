@@ -7,5 +7,5 @@
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
     android:isAccessibilityTool="true"
-    android:notificationTimeout="100"
+    android:notificationTimeout="0"
     android:description="@string/accessibility_service_description" />
