@@ -1,3 +1,5 @@
+// ===== REPLACE (purani file hatao, ye daalo) =====
+// Yaha rakho: app/src/main/java/com/bipin/clicker/FloatingBubbleService.kt
 package com.bipin.clicker
 
 import android.app.NotificationChannel
@@ -36,6 +38,7 @@ class FloatingBubbleService : Service() {
     }
 
     private var longPressTriggered = false
+    private var lastBubbleKey = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -150,6 +153,12 @@ class FloatingBubbleService : Service() {
             "clicker_live_status",
             Context.MODE_PRIVATE
         ).getString("status", "READY") ?: "READY"
+
+        // v13: har 100ms par bubble ka text/color dobara set karne se overlay redraw hota tha.
+        // Ab sirf status badalne par update.
+        val key = status + AreaPrefs.isPaused(this)
+        if (key == lastBubbleKey) return
+        lastBubbleKey = key
 
         bubbleView?.apply {
             when (status) {
