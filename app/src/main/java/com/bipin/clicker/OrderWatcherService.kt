@@ -1,0 +1,1131 @@
+package com.bipin.clicker
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.graphics.Path
+import android.graphics.Rect
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
+import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
+import androidx.core.app.NotificationCompat
+
+/**
+ * Reads the live order screen and tries the accept control as soon as it is actionable.
+ *
+ * v5 FIXES:
+ * 1) Runtime check - service sach mein gesture kar sakta hai ya nahi (canPerformGestures)
+ * 2) dispatchGesture=false hone par SAFA warning (Magnification gesture conflict)
+ * 3) Two-stroke press-hold-drag gesture - Porter jaise apps ACTION_DOWN ko theek se
+ *    register karte hain, isliye pehle chhota hold phir drag
+ * 4) Swipe ke baad verify + auto-retry loop (event ka intezaar nahi karta)
+ */
+class OrderWatcherService : AccessibilityService() {
+
+    companion object {
+        private const val TAG = "OrderWatcherService"
+        private const val CHANNEL_ID = "bipin_clicker_status"
+        private const val NOTIFICATION_ID = 501
+
+        private const val FAST_RETRY_MS = 70L
+        private const val FAST_RETRY_WINDOW_MS = 5200L
+        private const val CLICK_COOLDOWN_MS = 500L
+        private const val OCR_INTERVAL_MS = 120L
+
+        private const val VERIFY_INTERVAL_MS = 120L
+        private const val VERIFY_MAX_ATTEMPTS = 18
+
+        private val ACCEPT_WORDS = listOf(
+            "accept", "confirm", "take order", "accept order", "accept now"
+        )
+    }
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var retryUntil = 0L
+    private var retryRunning = false
+    private var lastActionAt = 0L
+    private var lastSignature: String? = null
+
+    private var verifyAttemptsLeft = 0
+
+    // FIX: scan throttle + gesture overlap guard + debug spam guard
+    private var lastScanAt = 0L
+    private var lastFullScanAt = 0L     // v11: pre-check ke bina poora scan kab hua
+    private var lastNotifAt = 0L        // v11: notification update throttle
+    private var ocrBusy = false
+    private var lastOcrHeartbeat = 0L
+    private var ocrNoSupportShown = false
+    private var slideInFlightUntil = 0L
+    private var lastReportMsg = ""
+    private var lastReportAt = 0L
+    private var verifySwipesDone = 0
+
+    // ---- SPEED (v10) ----
+    private var cardSeenAt = 0L          // card pehli baar kab dikha
+    private var lastSwipeDispatchAt = 0L
+    private var attemptInCard = 0        // is card par kitni koshish ho chuki
+    private var lastStyleUsed = -1
+    private var preferredStyle = -1      // jo style pehle kaam kar chuki (yaad rakhi hui)
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        SwipeZone.service = this
+        preferredStyle = learnPrefs().getInt("winStyle", -1)
+        showOnNotification()
+        setStatus("READY")
+        // OCR loop: screen ke PIXELS se text padhta hai (photo/screenshot/camera me dikhi screen bhi)
+        handler.postDelayed(ocrRunnable, 200L)
+
+        // FIX (naya): runtime par check karo ki gesture injection ka permission
+        // SAHI SE mila hai ya nahi. Agar false hai to service chal to rahi hai
+        // par touch kabhi nahi kar payegi.
+        try {
+            val canGesture = ((serviceInfo?.capabilities ?: 0) and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
+            val canRead = serviceInfo?.canRetrieveWindowContent == true
+            reportDebug("Service connected.\ncanPerformGestures=$canGesture\ncanRetrieveWindowContent=$canRead")
+            if (!canGesture) {
+                Toast.makeText(
+                    this,
+                    "GALTI: Gesture permission nahi mila! Accessibility OFF karke dubara ON karein",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "serviceInfo check failed", e)
+        }
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        // FIX: apne hi overlay/notification ke events se scan loop na bane
+        if (event.packageName?.toString() == packageName) return
+
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> scanNow()
+            else -> Unit
+        }
+    }
+
+    private fun hasAcceptHint(root: AccessibilityNodeInfo): Boolean {
+        for (w in ACCEPT_WORDS) {
+            try {
+                val hits = root.findAccessibilityNodeInfosByText(w)
+                if (hits != null && hits.isNotEmpty()) {
+                    hits.forEach { try { it.recycle() } catch (_: Exception) {} }
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return false
+    }
+
+    private fun scanNow() {
+        if (AreaPrefs.isPaused(applicationContext)) return
+
+        // FIX: itne events aate hain ki main thread jam ho jata tha -> gesture late/cancel
+        val tNow = SystemClock.uptimeMillis()
+        if (tNow - lastScanAt < 40L) return
+        lastScanAt = tNow
+
+        val roots = currentRoots()
+        if (roots.isEmpty()) return
+
+        for (root in roots) {
+            try {
+                if (root.packageName == packageName) continue
+
+                // v11 FAST PRE-CHECK: ek hi IPC se pooch lo ki screen par Accept jaisa text hai ya nahi.
+                // Nahi hai to poora tree (hazaaron IPC) mat padho -> main thread free rehta hai
+                // aur order aate hi turant scan hota hai. Har 600ms par poora scan phir bhi chalta hai (safety).
+                if (!hasAcceptHint(root) && tNow - lastFullScanAt < 600L) continue
+                if (tNow - lastFullScanAt >= 600L) lastFullScanAt = tNow
+
+                val texts = mutableListOf<String>()
+                collectText(root, texts)
+                val screenText = texts.joinToString(" | ")
+
+                if (screenText.isBlank()) continue
+                if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) {
+                    reportDebug(
+"Scan (${root.packageName}):\n\"${screenText.take(150)}\"\n-> NOT match"
+                    )
+                    continue
+                }
+
+                setStatus("ORDER FOUND")
+                markCardSeen()
+
+                val signature = "${root.packageName}:${screenText.hashCode()}"
+                val now = System.currentTimeMillis()
+
+                if (verifyAttemptsLeft > 0 && signature == lastSignature) {
+                    continue
+                }
+
+                // Every newly-seen order gets an immediate action attempt.
+                // Do not use the screen-text hash as a hard gate: the countdown
+                // text changes every second and the Accept control may only become
+                // actionable after a short delay.
+                if (signature != lastSignature || now - lastActionAt >= 350L) {
+                    if (findAndAccept(root)) {
+                        lastSignature = signature
+                        lastActionAt = now
+                        setStatus("ORDER UTHA RAHA")
+                        showDebugToast("Bipin Clicker: Order uthane ka action")
+                        reportDebug("ORDER UTHA RAHA - live Accept control par gesture bheja")
+                        startVerifyRetry()
+                    } else {
+                        reportDebug("Accept control nahi mila - live screen ko fast retry kar raha hoon")
+                        startFastRetry()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "scan error", e)
+            } finally {
+                try { root.recycle() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Swipe ke baad verify + auto-retry (event par depend nahi karta)
+    // ------------------------------------------------------------------
+    private val verifyRunnable = object : Runnable {
+        override fun run() {
+            if (AreaPrefs.isPaused(applicationContext)) {
+                verifyAttemptsLeft = 0
+                setStatus("OFF")
+                return
+            }
+            if (verifyAttemptsLeft-- <= 0) {
+                setStatus("READY")
+                reportDebug("Verify khatam - sab tries fail, order accept nahi hua")
+                return
+            }
+
+            val roots = currentRoots()
+            var stillAcceptVisible = false
+            var matchRoot: AccessibilityNodeInfo? = null
+
+            for (root in roots) {
+                try {
+                    if (root.packageName == packageName) continue
+                    val texts = mutableListOf<String>()
+                    collectText(root, texts)
+                    val screenText = texts.joinToString(" | ")
+                    if (screenText.isBlank()) continue
+
+                    if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) continue
+
+                    if (screenHasAcceptWord(screenText)) {
+                        stillAcceptVisible = true
+                        matchRoot = root
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "verify error", e)
+                } finally {
+                    if (matchRoot !== root) {
+                        try { root.recycle() } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            if (!stillAcceptVisible) {
+                verifyAttemptsLeft = 0
+                val styleAtVanish = lastStyleUsed
+                val recent = SystemClock.uptimeMillis() - lastSwipeDispatchAt < 4000L
+                if (recent && styleAtVanish >= 0) {
+                    // 'Order Missed' / 'Someone Else' aane me thoda time lagta hai -> thodi der baad dekho
+                    handler.postDelayed({
+                        if (!screenShowsMissed()) {
+                            preferredStyle = styleAtVanish
+                            learnPrefs().edit().putInt("winStyle", styleAtVanish).apply()
+                            setStatus("ORDER ACCEPT (shayad)")
+                            reportDebug("\u2705 Accept gayab, 'missed' nahi - shayad ACCEPT HUA. Style ${'A' + styleAtVanish} yaad kar li")
+                        } else {
+                            setStatus("ORDER MISSED")
+                            reportDebug("\u274C Order miss ho gaya (Missed / Someone Else). Style yaad nahi ki")
+                        }
+                    }, 900L)
+                } else {
+                    setStatus("ACTION RESULT UNKNOWN")
+                    reportDebug("Accept control screen se gayab ho gaya.")
+                }
+                matchRoot?.let { try { it.recycle() } catch (_: Exception) {} }
+                return
+            }
+
+            matchRoot?.let { r ->
+                try {
+                    verifySwipesDone++
+                    val done = if (verifySwipesDone % 4 == 0) {
+                        clickNodeOrParent(r) || findAndAccept(r)
+                    } else {
+                        findAndAccept(r)
+                    }
+                    lastActionAt = System.currentTimeMillis()
+                    reportDebug(
+                        "Verify retry #$verifySwipesDone -> action=$done " +
+                        "(swipe ${if (verifySwipesDone % 4 == 0) "+click" else "only"})"
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "verify retry error", e)
+                } finally {
+                    try { r.recycle() } catch (_: Exception) {}
+                }
+            }
+
+            handler.postDelayed(this, VERIFY_INTERVAL_MS)
+        }
+    }
+
+    private fun startVerifyRetry() {
+        verifyAttemptsLeft = VERIFY_MAX_ATTEMPTS
+        verifySwipesDone = 0
+        handler.removeCallbacks(verifyRunnable)
+        handler.postDelayed(verifyRunnable, VERIFY_INTERVAL_MS)
+    }
+
+    private fun screenHasAcceptWord(screenText: String): Boolean {
+        val raw = screenText.lowercase()
+        // If the target app has already moved to a missed/accepted state,
+        // do not treat the old card text as an active Accept control.
+        if (raw.contains("missed this order") ||
+            raw.contains("order missed") ||
+            raw.contains("already accepted") ||
+            raw.contains("order accepted")) {
+            return false
+        }
+
+        val compact = raw.replace(Regex("[^a-z0-9]+"), "")
+        return ACCEPT_WORDS.any { word ->
+            raw.contains(word) ||
+                compact.contains(word.replace(Regex("[^a-z0-9]+"), ""))
+        }
+    }
+
+    private fun currentRoots(): List<AccessibilityNodeInfo> {
+        val roots = LinkedHashSet<AccessibilityNodeInfo>()
+        try {
+            windows?.forEach { window ->
+                window.root?.let { roots.add(it) }
+            }
+        } catch (_: Exception) {
+        }
+        if (roots.isEmpty()) rootInActiveWindow?.let { roots.add(it) }
+        return roots.toList()
+    }
+
+    private fun startFastRetry() {
+        retryUntil = maxOf(
+            retryUntil,
+            System.currentTimeMillis() + FAST_RETRY_WINDOW_MS
+        )
+
+        if (retryRunning) return
+        retryRunning = true
+
+        handler.post(object : Runnable {
+            override fun run() {
+                if (AreaPrefs.isPaused(applicationContext)) {
+                    retryRunning = false
+                    setStatus("OFF")
+                    return
+                }
+
+                if (System.currentTimeMillis() > retryUntil) {
+                    retryRunning = false
+                    setStatus("READY")
+                    return
+                }
+
+                scanNow()
+                handler.postDelayed(this, FAST_RETRY_MS)
+            }
+        })
+    }
+
+    private fun findAndAccept(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
+
+        val raw = nodeText(node).lowercase().trim()
+        val compact = raw.replace(Regex("[^a-z0-9]+"), "")
+
+        // IMPORTANT SPEED PATH:
+        // The Accessibility tree usually exposes the fresh "Accept" text before
+        // the slider container becomes fully searchable. Use the learned geometry
+        // immediately, without waiting for screenshot/OCR or walking the slider tree.
+        val isAcceptNode = ACCEPT_WORDS.any { word ->
+            raw.contains(word) ||
+                compact.contains(word.replace(Regex("[^a-z0-9]+"), ""))
+        }
+
+        if (isAcceptNode && !raw.contains("pickup") && !raw.contains("drop")) {
+            // 1) Fastest path: fresh Accept-node Y + learned X coordinates.
+            // This bypasses the saved Swipe Zone so a stale manual zone cannot delay
+            // or misplace the first live-order gesture.
+            if (fastSwipeFromText(node)) {
+                reportDebug("FAST swipe dispatched immediately")
+                return true
+            }
+
+            // 2) If geometry is not usable yet, try the actual live slider node.
+            val swiped = swipeAcceptControl(node)
+            reportDebug("Accept control mila. NODE-SWIPE dispatched=$swiped")
+            if (swiped) return true
+
+            // 3) Manual Swipe Zone as an explicit fallback.
+            if (SwipeZone.isSet(applicationContext) &&
+                slideGesture(0f, 0f, 0f, "ZONE")) return true
+
+            // 4) Screenshot/OCR fallback is slower, so use it only after the
+            // direct Accessibility paths above have failed.
+            val livePixelSwipe = swipeLiveSliderFromScreenshot(node)
+            reportDebug("LIVE PIXEL-SWIPE dispatched=$livePixelSwipe")
+            if (livePixelSwipe) return true
+
+            val clicked = clickNodeOrParent(node, tapFallback = true)
+            reportDebug("SWIPE dispatch nahi hua; CLICK fallback=$clicked")
+            if (clicked) return true
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = try { node.getChild(i) } catch (_: Exception) { null }
+            if (child != null && findAndAccept(child)) return true
+        }
+
+        return false
+    }
+
+    private fun nodeText(node: AccessibilityNodeInfo): String {
+        return buildString {
+            node.text?.toString()?.let { append(it).append(' ') }
+            node.contentDescription?.toString()?.let { append(it).append(' ') }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                node.hintText?.toString()?.let { append(it).append(' ') }
+            }
+            node.viewIdResourceName?.let { append(it).append(' ') }
+        }.trim()
+    }
+
+    private fun clickNodeOrParent(node: AccessibilityNodeInfo, tapFallback: Boolean = false): Boolean {
+        var current: AccessibilityNodeInfo? = node
+        var depth = 0
+
+        while (current != null && depth < 8) {
+            if (current.isEnabled && current.isClickable) {
+                try {
+                    if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        Log.d(TAG, "ACTION_CLICK succeeded")
+                        return true
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            current = try { current.parent } catch (_: Exception) { null }
+            depth++
+        }
+
+        // FIX: ACTION_CLICK kaam nahi karta (React Native / custom view). Node ke beech me
+        // real screen tap bhejo.
+        return if (tapFallback) tapNodeCenter(node) else false
+    }
+
+    // ------------------------------------------------------------------
+    // OCR: screenshot -> text -> "Accept" dhoondo -> slide / tap
+    // ------------------------------------------------------------------
+    private val ocrRunnable = object : Runnable {
+        override fun run() {
+            runOcrOnce()
+            handler.postDelayed(this, OCR_INTERVAL_MS)
+        }
+    }
+
+    private fun runOcrOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            if (!ocrNoSupportShown) {
+                ocrNoSupportShown = true
+                reportDebug("OCR ke liye Android 11+ chahiye (is phone par band)")
+            }
+            return
+        }
+        if (ocrBusy || AreaPrefs.isPaused(applicationContext)) return
+        // Action ke turant baad screenshot mat lo (phone ka screenshot popup slider ke upar aa jata hai)
+        if (System.currentTimeMillis() - lastActionAt < 300L) return
+        if (SystemClock.uptimeMillis() < slideInFlightUntil) return
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm != null && !pm.isInteractive) return
+
+        ocrBusy = true
+        ScreenOcrScanner.capture(this) { res, err ->
+            handler.post {
+                ocrBusy = false
+                if (res == null) {
+                    if (err != null) reportDebug("OCR: $err")
+                } else {
+                    try {
+                        handleOcr(res)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "ocr handle error", e)
+                    } finally {
+                        try { res.bitmap.recycle() } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleOcr(res: ScreenOcrScanner.Result) {
+        if (res.lines.isEmpty()) {
+            // Screenshot poora kaala ho to app screenshot block kar rahi hai (FLAG_SECURE)
+            val bmp = res.bitmap
+            var allBlack = true
+            for (i in 1..5) for (j in 1..5) {
+                val px = bmp.getPixel(bmp.width * i / 6, bmp.height * j / 6)
+                if ((px and 0xFFFFFF) != 0) allBlack = false
+            }
+            if (allBlack) reportDebug("OCR: screenshot poora KAALA - app screenshot block kar rahi hai")
+            return
+        }
+        // Apna debug box screenshot me aata hai - uski lines ignore karo
+        val ignoreAboveY = DebugOverlay.occupiedBottomPx()
+        val lines = res.lines.filter { it.box.top >= ignoreAboveY }
+        val text = lines.joinToString(" | ") { it.text }
+        if (text.isBlank()) return
+
+        val hb = SystemClock.uptimeMillis()
+        if (hb - lastOcrHeartbeat > 3000L) {
+            lastOcrHeartbeat = hb
+            reportDebug("OCR chal raha hai: ${lines.size} lines padhi")
+        }
+
+        val acceptLine = lines.firstOrNull {
+            val t = it.text.lowercase()
+            t.contains("accept") && !t.contains("accepted") && !t.contains("missed")
+        } ?: return
+
+        if (!AreaPrefs.matchesScreenText(applicationContext, text)) {
+            reportDebug("OCR: Accept mila par Pickup/Drop match NAHI\n${text.take(140)}")
+            return
+        }
+        if (System.currentTimeMillis() - lastActionAt < 180L) return
+
+        setStatus("ORDER FOUND")
+        markCardSeen()
+        val slider = ScreenOcrScanner.estimateSlider(res.bitmap, acceptLine.box)
+        val ok = if (slider != null) {
+            val h = slider.height().toFloat()
+            // Thumb ke THEEK upar se pakdo, warna touch card/background par girta hai aur
+            // poori screen khinch jati hai.
+            val thumbX = ScreenOcrScanner.findThumbCenterX(res.bitmap, slider)?.toFloat()
+                ?: (slider.left + h * 0.95f)
+            learnGeometry(thumbX, slider.right - h * 0.25f)
+            slideGesture(
+                thumbX,
+                slider.exactCenterY(),
+                slider.right - h * 0.25f,
+                "OCR slider=$slider thumbX=${thumbX.toInt()}"
+            )
+        } else if (SwipeZone.isSet(applicationContext)) {
+            slideGesture(0f, 0f, 0f, "ZONE")
+        } else {
+            // STRICT: slider pakda nahi gaya to andaze se swipe nahi - warna poori screen khinch jati hai
+            reportDebug("Slider (neela pill) nahi mila - swipe ROKA\nAccept text y=${acceptLine.box.centerY()}")
+            false
+        }
+        lastActionAt = System.currentTimeMillis()
+        if (ok) {
+            setStatus("ORDER UTHA RAHA")
+            showDebugToast("Bipin Clicker: OCR se order uthane ka action")
+        }
+    }
+
+    /**
+     * LIVE ORDER FALLBACK:
+     * Accessibility node me slider na mile to current live screen ka screenshot lo,
+     * Accept text ko OCR se locate karo aur usi pixel slider/thumb par swipe bhejo.
+     *
+     * Isse screenshot/video wala coordinate detector live order ke liye bhi use hota hai.
+     */
+    private fun swipeLiveSliderFromScreenshot(acceptNode: AccessibilityNodeInfo): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        if (ocrBusy) return false
+        if (SystemClock.uptimeMillis() < slideInFlightUntil) return true
+
+        val nodeRect = Rect()
+        try {
+            acceptNode.getBoundsInScreen(nodeRect)
+        } catch (_: Exception) {
+            return false
+        }
+
+        ocrBusy = true
+        ScreenOcrScanner.capture(this) { res, err ->
+            handler.post {
+                ocrBusy = false
+
+                if (res == null) {
+                    reportDebug("LIVE pixel fallback: screenshot fail${if (err != null) " - $err" else ""}")
+                    return@post
+                }
+
+                try {
+                    val ignoreAboveY = DebugOverlay.occupiedBottomPx()
+                    val lines = res.lines.filter { it.box.top >= ignoreAboveY }
+
+                    // OCR me Accept line dhoondo. Agar OCR text miss kare to Accessibility
+                    // node ke y ke sabse paas wali line use karo.
+                    val acceptLine = lines.firstOrNull {
+                        val t = it.text.lowercase()
+                        t.contains("accept") && !t.contains("accepted") && !t.contains("missed")
+                    } ?: lines.minByOrNull { line ->
+                        kotlin.math.abs(line.box.centerY() - nodeRect.centerY())
+                    }?.takeIf {
+                        kotlin.math.abs(it.box.centerY() - nodeRect.centerY()) <= 180
+                    }
+
+                    if (acceptLine == null) {
+                        reportDebug("LIVE pixel fallback: Accept line nahi mili")
+                        return@post
+                    }
+
+                    val slider = ScreenOcrScanner.estimateSlider(res.bitmap, acceptLine.box)
+                    if (slider == null) {
+                        reportDebug(
+                            "LIVE pixel fallback: slider pill nahi mila; " +
+                            "Accept y=${acceptLine.box.centerY()}"
+                        )
+                        return@post
+                    }
+
+                    val thumbX = ScreenOcrScanner.findThumbCenterX(
+                        res.bitmap, slider
+                    )?.toFloat() ?: (slider.left + slider.height() * 0.95f)
+
+                    // Screenshot buffer aur gesture screen coordinates kabhi-kabhi alag size
+                    // ke hote hain. Isliye actual display size par scale karo.
+                    val dm = resources.displayMetrics
+                    val sx = dm.widthPixels.toFloat() / res.bitmap.width.toFloat()
+                    val sy = dm.heightPixels.toFloat() / res.bitmap.height.toFloat()
+
+                    val startX = thumbX * sx
+                    val y = slider.exactCenterY() * sy
+                    val endX = (slider.right - slider.height() * 0.25f) * sx
+
+                    if (endX <= startX + 100f) {
+                        reportDebug(
+                            "LIVE pixel fallback: invalid coords " +
+                            "start=${startX.toInt()} end=${endX.toInt()} y=${y.toInt()}"
+                        )
+                        return@post
+                    }
+
+                    learnGeometry(startX, endX)
+                    val ok = slideGesture(
+                        startX,
+                        y,
+                        endX,
+                        "LIVE PIXEL slider=$slider node=$nodeRect scale=${"%.2f".format(sx)},${"%.2f".format(sy)}",
+                        useSavedZone = false
+                    )
+
+                    if (ok) {
+                        lastActionAt = System.currentTimeMillis()
+                        setStatus("ORDER UTHA RAHA")
+                        reportDebug(
+                            "LIVE PIXEL-SWIPE OK: thumb=${startX.toInt()},${y.toInt()} " +
+                            "end=${endX.toInt()}"
+                        )
+                    } else {
+                        reportDebug("LIVE PIXEL-SWIPE dispatch fail")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "live pixel swipe error", e)
+                    reportDebug("LIVE pixel fallback error: ${e.message}")
+                } finally {
+                    try { res.bitmap.recycle() } catch (_: Exception) {}
+                }
+            }
+        }
+        return true
+    }
+
+    private fun learnPrefs() = getSharedPreferences("swipe_learn", MODE_PRIVATE)
+
+    private fun markCardSeen() {
+        val up = SystemClock.uptimeMillis()
+        if (up - lastSwipeDispatchAt > 6000L && up - cardSeenAt > 6000L) cardSeenAt = up
+    }
+
+    /** Pixel se mili sahi slider position ko yaad rakho (screen width ke ratio me). */
+    private fun learnGeometry(thumbX: Float, endX: Float) {
+        val w = resources.displayMetrics.widthPixels.toFloat()
+        if (w <= 0f) return
+        val t = thumbX / w
+        val e = endX / w
+        if (t < 0.08f || t > 0.5f || e < 0.6f || e > 0.98f || e - t < 0.3f) return
+        learnPrefs().edit().putFloat("thumb", t).putFloat("end", e).apply()
+    }
+
+    /**
+     * Sabse tez tareeka: Accept text ka y (Accessibility se, ek dum fresh) + pehle se seekhi hui
+     * thumb/end x. Koi screenshot ya OCR nahi - sirf gesture.
+     */
+    private fun fastSwipeFromText(node: AccessibilityNodeInfo): Boolean {
+        val r = Rect()
+        try { node.getBoundsInScreen(r) } catch (_: Exception) { return false }
+        val dm = resources.displayMetrics
+        if (r.width() <= 0 || r.height() <= 0 || r.height() > 300) return false
+        val y = r.exactCenterY()
+        if (y < 0f || y > dm.heightPixels.toFloat()) return false
+        val p = learnPrefs()
+        val w = dm.widthPixels.toFloat()
+        val startX = w * p.getFloat("thumb", 0.229f)
+        val endX = w * p.getFloat("end", 0.89f)
+        return slideGesture(startX, y, endX, "FAST text=$r thumb=${startX.toInt()} end=${endX.toInt()}", useSavedZone = false)
+    }
+
+    private fun screenShowsMissed(): Boolean {
+        for (root in currentRoots()) {
+            try {
+                if (root.packageName == packageName) continue
+                val texts = mutableListOf<String>()
+                collectText(root, texts)
+                val raw = texts.joinToString(" | ").lowercase()
+                if (raw.contains("missed") || raw.contains("someone else") || raw.contains("already accepted")) return true
+            } catch (_: Exception) {
+            } finally {
+                try { root.recycle() } catch (_: Exception) {}
+            }
+        }
+        return false
+    }
+
+    private fun tapAt(x: Float, y: Float): Boolean {
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
+            .build()
+        val ok = try { dispatchGesture(gesture, null, null) } catch (_: Exception) { false }
+        reportDebug("OCR TAP at ${x.toInt()},${y.toInt()} dispatched=$ok")
+        return ok
+    }
+
+    /**
+     * Kai apps slider ka container Accessibility tree me expose nahi karte - sirf "Accept in 7s"
+     * text node milta hai. Slider text ke theek peeche, screen ke beech me hota hai: isliye text ki
+     * height (y) par thumb se right tak slide karo.
+     */
+    private fun geometricSlideFromNode(node: AccessibilityNodeInfo): Boolean {
+        val r = Rect()
+        try { node.getBoundsInScreen(r) } catch (_: Exception) { return false }
+        if (r.width() <= 0 || r.height() <= 0 || r.height() > 300) return false
+        val w = resources.displayMetrics.widthPixels.toFloat()
+        return slideGesture(w * 0.229f, r.exactCenterY(), w * 0.90f, "GEOM text=$r")
+    }
+
+    private fun tapNodeCenter(node: AccessibilityNodeInfo): Boolean {
+        val r = Rect()
+        try { node.getBoundsInScreen(r) } catch (_: Exception) { return false }
+        if (r.width() <= 0 || r.height() <= 0) return false
+        // Safety: poori screen jaisa bada node ho to beech me tap mat karo
+        val dm = resources.displayMetrics
+        if (r.height() > dm.heightPixels * 0.5f || r.width() > dm.widthPixels * 0.98f && r.height() > dm.heightPixels * 0.25f) return false
+
+        val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
+            .build()
+        val ok = try { dispatchGesture(gesture, null, null) } catch (_: Exception) { false }
+        reportDebug("TAP fallback at ${r.centerX()},${r.centerY()} dispatched=$ok")
+        return ok
+    }
+
+    /**
+     * FIX (naya): TWO-STROKE press-hold-drag.
+     *
+     * Pehle ek chhota stroke: thumb par touch-down + 8px hold (250ms).
+     * Phir continueStroke: wahin se poore right tak drag (300ms).
+     *
+     * Kyun? Porter ka slider ACTION_DOWN ke turant baad hi tez move ko
+     * "fling/invalid" maan kar discard kar deta hai. Real ungli pehle dabti
+     * hai phir rukti hai phir khisakti hai - wahi pattern copy kiya hai.
+     */
+    private fun swipeAcceptControl(node: AccessibilityNodeInfo): Boolean {
+        val target = findSliderLikeAncestor(node) ?: return false
+        val bounds = Rect()
+
+        try {
+            target.getBoundsInScreen(bounds)
+        } catch (_: Exception) {
+            return false
+        }
+
+        if (bounds.width() < 200 || bounds.height() < 40) return false
+
+        // The screenshot's control is a wide horizontal slider. Prefer the
+        // actual thumb child; otherwise use a point about one thumb-radius
+        // inside the left edge. Do NOT start at the text label.
+        val thumb = findThumbChild(target, bounds)
+        val thumbCenterX = thumb?.centerX()?.toFloat()
+            ?: (bounds.left + bounds.height() * 0.98f)
+        val thumbCenterY = thumb?.centerY()?.toFloat()
+            ?: bounds.centerY().toFloat()
+
+        val startX = thumbCenterX.coerceIn(
+            bounds.left + bounds.height() * 0.55f,
+            bounds.left + bounds.width() * 0.40f
+        )
+        val endX = (bounds.right - bounds.height() * 0.30f).toFloat()
+        val y = thumbCenterY.coerceIn(
+            bounds.top + bounds.height() * 0.25f,
+            bounds.bottom - bounds.height() * 0.25f
+        )
+
+        if (endX <= startX + 80f) return false
+
+        val info = "bounds=$bounds\nstart=${startX.toInt()},${y.toInt()}\nend=${endX.toInt()}\nthumb=${thumb?.let { "${it.centerX()},${it.centerY()}" } ?: "fallback"}"
+        return slideGesture(startX, y, endX, info)
+    }
+
+    private var swipeStyle = 0
+    private var lastSwipeResult = "-"
+    private var lastLatMs = -1L          // v11: card dikhne se swipe tak ka time (DONE ke baad bhi dikhe)
+
+    /**
+     * Video se dikha: pehle wala "hold + drag" (2 gesture jodkar) me thumb sirf ~40px hilta tha,
+     * phir wapas laut jata tha. Is phone/app par shayad wo tareeka chalta nahi. Isliye ab har
+     * koshish me alag STYLE aazmata hai (A, B, C, D), jo chal jaye. Debug box me har koshish
+     * ka natija "[last: styleX ...]" me dikhta hai.
+     */
+    private fun slideGesture(
+        startX0: Float,
+        y0: Float,
+        endX0: Float,
+        info0: String,
+        useSavedZone: Boolean = true
+    ): Boolean {
+        // Editor khula ho to uske handles slider par touch rok lete hain -> pehle editor band karo
+        if (SwipeZone.isEditing()) {
+            SwipeZone.closeEditor()
+            handler.postDelayed({ slideGesture(startX0, y0, endX0, info0) }, 250L)
+            return true
+        }
+        // Manual Swipe Zone normal paths ke liye preserve hai.
+        // LIVE PIXEL path me ise bypass kiya jata hai, kyunki us path ne current
+        // live screen ke actual slider/thumb coordinates abhi-abhi detect kiye hain.
+        val zone = if (useSavedZone) SwipeZone.get(applicationContext) else null
+        val startX = zone?.startX ?: startX0
+        val y = zone?.y ?: y0
+        val endX = zone?.endX ?: endX0
+        val info = if (zone != null) "ZONE start=${startX.toInt()},${y.toInt()} end=${endX.toInt()}" else info0
+
+        // Pichla gesture chal raha ho to naya mat bhejo (wo pichle ko cancel kar deta hai)
+        if (SystemClock.uptimeMillis() < slideInFlightUntil) return true
+
+        val canGesture = try {
+            ((serviceInfo?.capabilities ?: 0) and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
+        } catch (_: Exception) {
+            false
+        }
+        if (!canGesture) {
+            reportDebug("❌ Gesture permission missing. Accessibility service ko OFF karke ON karein.")
+            return false
+        }
+
+        val dm = resources.displayMetrics
+        if (startX < 0f || endX > dm.widthPixels.toFloat() || y < 0f || y > dm.heightPixels.toFloat() ||
+            endX - startX < 150f
+        ) {
+            reportDebug("Swipe roka: start/end galat (start=${startX.toInt()} end=${endX.toInt()} y=${y.toInt()})")
+            return false
+        }
+
+        val nowUp = SystemClock.uptimeMillis()
+        if (nowUp - lastSwipeDispatchAt > 6000L) attemptInCard = 0
+        val baseStyle = if (preferredStyle >= 0) preferredStyle else 0
+        val style = if (preferredStyle >= 0 && attemptInCard < 2) preferredStyle else (baseStyle + attemptInCard) % 4
+        attemptInCard++
+        swipeStyle++
+        lastStyleUsed = style
+        val tag = "style" + ('A' + style)
+        slideInFlightUntil = SystemClock.uptimeMillis() + 280L
+
+        fun finish(ok: Boolean, what: String) {
+            // thumb ko wapas laut'ne ka time do, phir agli koshish
+            slideInFlightUntil = SystemClock.uptimeMillis() + 50L
+            lastSwipeResult = "$tag ${if (ok) "DONE" else what} \u23F1${lastLatMs}ms"
+            reportDebug("SWIPE $lastSwipeResult\n$info")
+        }
+
+        fun single(durationMs: Long): Boolean {
+            val path = Path().apply {
+                moveTo(startX, y)
+                lineTo(startX + 10f, y)
+                lineTo(endX, y)
+            }
+            return dispatchGesture(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
+                    .build(),
+                object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) { finish(true, "") }
+                    override fun onCancelled(g: GestureDescription?) { finish(false, "CANCELLED") }
+                },
+                null
+            )
+        }
+
+        fun quickFlick(): Boolean {
+            // Kai slider sirf tez "flick" (chhota, tez swipe) se hi accept hote hain -
+            // dheere drag ko threshold-check fail karke discard kar dete hain.
+            val path = Path().apply {
+                moveTo(startX, y)
+                lineTo(endX, y)
+            }
+            return dispatchGesture(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 90L))
+                    .build(),
+                object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) { finish(true, "") }
+                    override fun onCancelled(g: GestureDescription?) { finish(false, "CANCELLED") }
+                },
+                null
+            )
+        }
+
+        fun holdThenDrag(): Boolean {
+            val holdPath = Path().apply { moveTo(startX, y); lineTo(startX + 2f, y) }
+            val first = GestureDescription.StrokeDescription(holdPath, 0L, 150L, true)
+            return dispatchGesture(
+                GestureDescription.Builder().addStroke(first).build(),
+                object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) {
+                        val dragPath = Path().apply { moveTo(startX + 2f, y); lineTo(endX, y) }
+                        val second = first.continueStroke(dragPath, 0L, 350L, false)
+                        val ok2 = try {
+                            dispatchGesture(
+                                GestureDescription.Builder().addStroke(second).build(),
+                                object : GestureResultCallback() {
+                                    override fun onCompleted(g2: GestureDescription?) { finish(true, "") }
+                                    override fun onCancelled(g2: GestureDescription?) { finish(false, "CANCELLED(drag)") }
+                                },
+                                null
+                            )
+                        } catch (e: Exception) { false }
+                        if (!ok2) finish(false, "DRAG REJECTED")
+                    }
+                    override fun onCancelled(g: GestureDescription?) { finish(false, "CANCELLED(hold)") }
+                },
+                null
+            )
+        }
+
+        val dispatched = try {
+            when (style) {
+                0 -> single(180L)
+                1 -> single(240L)
+                2 -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) holdThenDrag() else single(240L)
+                else -> quickFlick()
+            }
+        } catch (e: Exception) {
+            reportDebug("❌ dispatchGesture exception: ${e.message}")
+            false
+        }
+
+        if (!dispatched) {
+            slideInFlightUntil = 0L
+            lastSwipeResult = "$tag REJECTED"
+            reportDebug("❌ SWIPE $tag REJECTED by Android")
+        } else {
+            lastSwipeDispatchAt = SystemClock.uptimeMillis()
+            val lat = if (cardSeenAt > 0L) lastSwipeDispatchAt - cardSeenAt else -1L
+            lastLatMs = lat
+            reportDebug("SWIPE $tag TRYING \u23F1${lat}ms\n$info")
+            // Hari line + hara » button: dikhata hai ki swipe kahan ho raha hai
+            SwipeIndicator.show(this, startX, y, endX, 650L)
+        }
+        return dispatched
+    }
+
+    private fun findThumbChild(container: AccessibilityNodeInfo, containerBounds: Rect): Rect? {
+        var best: Rect? = null
+        var bestDiff = Int.MAX_VALUE
+
+        fun visit(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 4) return
+            val r = Rect()
+            try {
+                node.getBoundsInScreen(r)
+            } catch (_: Exception) {
+                return
+            }
+            if (r.width() in 30..containerBounds.height() * 2 &&
+                r.height() in 20..containerBounds.height() &&
+                r.left <= containerBounds.left + containerBounds.height()
+            ) {
+                val diff = kotlin.math.abs(r.width() - r.height())
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    best = Rect(r)
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val child = try { node.getChild(i) } catch (_: Exception) { null }
+                visit(child, depth + 1)
+            }
+        }
+
+        visit(container, 0)
+        return best
+    }
+
+    private fun findSliderLikeAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var current: AccessibilityNodeInfo? = node
+        var best: AccessibilityNodeInfo? = null
+        var bestScore = 0
+        var depth = 0
+
+        while (current != null && depth < 8) {
+            val r = Rect()
+            try {
+                current.getBoundsInScreen(r)
+            } catch (_: Exception) {
+                current = try { current.parent } catch (_: Exception) { null }
+                depth++
+                continue
+            }
+
+            val width = r.width()
+            val height = r.height()
+            val ratio = if (height > 0) width.toFloat() / height else 0f
+
+            if (width >= 200 && height >= 40 && ratio >= 2.3f) {
+                val score = width + if (current.isClickable) 10000 else 0
+                if (score > bestScore) {
+                    best = current
+                    bestScore = score
+                }
+            }
+
+            current = try { current.parent } catch (_: Exception) { null }
+            depth++
+        }
+
+        return best
+    }
+
+    private fun collectText(node: AccessibilityNodeInfo?, out: MutableList<String>) {
+        if (node == null) return
+
+        node.text?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
+        node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            node.hintText?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
+        }
+
+        node.paneTitle?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
+
+        for (i in 0 until node.childCount) {
+            val child = try { node.getChild(i) } catch (_: Exception) { null }
+            if (child != null) collectText(child, out)
+        }
+    }
+
+    private fun reportDebug(message: String) {
+        // FIX: har 100ms par overlay + notification update karne se system throttle karta tha
+        // aur main thread bhari ho jata tha.
+        val now = SystemClock.uptimeMillis()
+        if (message == lastReportMsg && now - lastReportAt < 1500L) return
+        if (message.startsWith("Scan (") && now - lastReportAt < 1000L) return
+        lastReportMsg = message
+        lastReportAt = now
+        val full = if (lastSwipeResult != "-" && !message.startsWith("SWIPE")) "$message\n[last: $lastSwipeResult]" else message
+        DebugOverlay.update(this, full)
+        updateStatusNotification(full)
+    }
+
+    private fun setStatus(status: String) {
+        getSharedPreferences("clicker_live_status", MODE_PRIVATE)
+            .edit()
+            .putString("status", status)
+            .apply()
+    }
+
+    private fun showDebugToast(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showOnNotification() {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "BIPIN Clicker Status",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_service_on)
+            .setContentTitle("BIPIN Clicker: ON")
+            .setContentText("Live order reading is active")
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        nm.notify(NOTIFICATION_ID, notification)
+    }
+
+    private fun updateStatusNotification(message: String) {
+        val upNow = SystemClock.uptimeMillis()
+        if (upNow - lastNotifAt < 1000L) return
+        lastNotifAt = upNow
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_service_on)
+            .setContentTitle("BIPIN Clicker DEBUG")
+            .setContentText(message.take(60))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message.take(500)))
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        nm.notify(NOTIFICATION_ID, notification)
+    }
+
+    override fun onInterrupt() = Unit
+
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        verifyAttemptsLeft = 0
+        setStatus("OFF")
+        DebugOverlay.hide()
+        SwipeIndicator.hide()
+        SwipeZone.closeEditor()
+        SwipeZone.service = null
+        getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        super.onDestroy()
+    }
+}
