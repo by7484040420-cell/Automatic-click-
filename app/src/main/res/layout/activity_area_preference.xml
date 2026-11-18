@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#121212"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btnTabPickup"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="PICKUP" />
+
+        <Button
+            android:id="@+id/btnTabDrop"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="DROP" />
+    </LinearLayout>
+
+    <EditText
+        android:id="@+id/locationSearch"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="Location / sector search ya type karein"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#BDBDBD"
+        android:singleLine="true"
+        android:inputType="text"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:background="#2A2A2A"
+        android:layout_marginBottom="8dp" />
+
+    <CheckBox
+        android:id="@+id/cbNoPickupRestriction"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:text="Pickup khaali rakhein (koi bhi pickup chalega)" />
+
+    <TextView
+        android:id="@+id/tvKeywordHelp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Khaas jagah ke naam (comma se alag). Inme se koi EK bhi pickup me mile to order chalega."
+        android:textColor="#FFB74D"
+        android:textSize="13sp" />
+
+    <EditText
+        android:id="@+id/pickupKeywords"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="72dp"
+        android:gravity="top|start"
+        android:hint="Jaise: Mote Lala, Gurudwara, Lal Qila, Metro"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#BDBDBD"
+        android:inputType="textMultiLine|textCapWords"
+        android:padding="12dp"
+        android:background="#2A2A2A"
+        android:layout_marginTop="4dp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp">
+
+        <LinearLayout
+            android:id="@+id/cityContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+
+    <Button
+        android:id="@+id/btnResetAll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="SAB LOCATION RESET (sab hata do)" />
+
+    <Button
+        android:id="@+id/btnSaveAreas"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="SAVE" />
+</LinearLayout>

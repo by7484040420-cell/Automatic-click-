@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#121212"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Permission Setup"
+        android:textColor="#FFFFFF"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:paddingBottom="16dp" />
+
+    <!-- Accessibility -->
+    <TextView
+        android:id="@+id/statusAccessibility"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:paddingBottom="4dp" />
+    <Button
+        android:id="@+id/btnOpenAccessibility"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Accessibility Settings Kholein" />
+
+    <View android:layout_width="match_parent" android:layout_height="16dp" />
+
+    <!-- Overlay -->
+    <TextView
+        android:id="@+id/statusOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:paddingBottom="4dp" />
+    <Button
+        android:id="@+id/btnOpenOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Overlay Permission Kholein" />
+
+    <View android:layout_width="match_parent" android:layout_height="16dp" />
+
+    <!-- Notification -->
+    <TextView
+        android:id="@+id/statusNotification"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:paddingBottom="4dp" />
+    <Button
+        android:id="@+id/btnOpenNotification"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Notification Permission Allow Karein" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <Button
+        android:id="@+id/btnDone"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="DONE / WAPAS JAYEIN" />
+
+</LinearLayout>
