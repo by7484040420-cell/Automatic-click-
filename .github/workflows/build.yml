@@ -23,6 +23,16 @@ jobs:
         with:
           gradle-version: 8.13
 
+      - name: Restore Debug Keystore
+        run: |
+          if [ ! -f app/debug.keystore ]; then
+            if [ -f app/debug.keystore.base64 ]; then
+              base64 -d app/debug.keystore.base64 > app/debug.keystore
+            else
+              keytool -genkeypair -v -keystore app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            fi
+          fi
+
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
 

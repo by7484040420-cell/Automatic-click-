@@ -19,11 +19,13 @@ android {
     // har naye build me signature same rahe - warna har build ke baad purana app
     // uninstall karke hi naya install karna padta.
     signingConfigs {
-        debug {
-            storeFile file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
+        if (file('debug.keystore').exists()) {
+            debug {
+                storeFile file('debug.keystore')
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
         }
     }
 
@@ -32,7 +34,9 @@ android {
             minifyEnabled false
         }
         debug {
-            signingConfig signingConfigs.debug
+            if (file('debug.keystore').exists()) {
+                signingConfig signingConfigs.debug
+            }
         }
     }
 
