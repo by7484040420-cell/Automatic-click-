@@ -138,6 +138,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -196,7 +197,11 @@ class NetPulseVpnService : VpnService() {
                 .setContentText("Temporary 1s net block active...")
                 .setSmallIcon(android.R.drawable.stat_sys_warning)
                 .build()
-            startForeground(NOTIF_ID, n)
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, n)
+            }
         }
     }
 
@@ -207,6 +212,8 @@ class NetPulseVpnService : VpnService() {
             .addAddress("10.250.250.2", 32)
             .addRoute("0.0.0.0", 0)
             .addDnsServer("10.250.250.1")
+            .addAddress("fd00:250::2", 128)
+            .addRoute("::", 0)
 
         if (targetMode == "SELECTED_APPS" && targetPackages.isNotEmpty()) {
             // Sirf chune hue APKs ka net block karega (baaki phone chalu rahega)
@@ -279,16 +286,21 @@ export function generateManifestSnippet(): string {
   return `<!-- GitHub Path: app/src/main/AndroidManifest.xml -->
 <!-- <manifest> ke andar ye permissions add karein: -->
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
 <!-- <application> ke andar ye service add karein: -->
 <service
     android:name=".NetPulseVpnService"
     android:permission="android.permission.BIND_VPN_SERVICE"
+    android:foregroundServiceType="specialUse"
     android:exported="false">
     <intent-filter>
         <action android:name="android.net.VpnService" />
     </intent-filter>
+    <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="temporary_vpn_pulse" />
 </service>`;
 }
 
