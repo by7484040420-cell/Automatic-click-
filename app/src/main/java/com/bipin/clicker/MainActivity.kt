@@ -143,7 +143,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnPickApps.setOnClickListener { openAppPickerDialog() }
         binding.btnVpnDuration.setOnClickListener {
-            val steps = listOf(500L, 1000L, 1500L, 2000L)
+            val steps = listOf(500L, 800L, 1000L, 1500L, 2000L)
             val cur = AreaPrefs.getVpnDurationMs(this)
             val idx = steps.indexOfFirst { it == cur }
             val nextMs = steps[(idx + 1) % steps.size]

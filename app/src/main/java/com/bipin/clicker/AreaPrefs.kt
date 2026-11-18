@@ -34,11 +34,17 @@ object AreaPrefs {
     private const val KEY_VPN_TARGET_MODE = "vpn_pulse_target_mode"
     private const val KEY_VPN_PACKAGES_JSON = "vpn_pulse_packages_json"
 
-    // v13 SPEED: selections memory me cache hain
+    // v13 SPEED: selections + VPN settings memory me cache hain (0ms lookup)
     @Volatile private var pickupCache: Map<String, Set<String>>? = null
     @Volatile private var dropCache: Map<String, Set<String>>? = null
     @Volatile private var rejectPickupCache: Map<String, Set<String>>? = null
     @Volatile private var rejectDropCache: Map<String, Set<String>>? = null
+    @Volatile private var pickupKeywordsCache: List<String>? = null
+    @Volatile private var maxPickupKmCache: Float? = null
+    @Volatile private var vpnEnabledCache: Boolean? = null
+    @Volatile private var vpnDurationMsCache: Long? = null
+    @Volatile private var vpnTargetModeCache: String? = null
+    @Volatile private var vpnPackagesCache: Set<String>? = null
     private val WHITESPACE = Regex("\\s+")
 
     private fun copySelections(src: Map<String, Set<String>>): Map<String, Set<String>> {
@@ -56,32 +62,44 @@ object AreaPrefs {
     fun isPaused(context: Context): Boolean =
         prefs(context).getBoolean(KEY_PAUSED, false)
 
-    // ---------- VPN 1s Net-Off Settings ----------
+    // ---------- VPN 0.5s-1s Net-Off Settings ----------
 
     fun isVpnPulseEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_VPN_ENABLED, true)
+        vpnEnabledCache ?: prefs(context).getBoolean(KEY_VPN_ENABLED, true).also { vpnEnabledCache = it }
 
     fun setVpnPulseEnabled(context: Context, enabled: Boolean) {
+        vpnEnabledCache = enabled
         prefs(context).edit().putBoolean(KEY_VPN_ENABLED, enabled).apply()
     }
 
     fun getVpnDurationMs(context: Context): Long =
-        prefs(context).getLong(KEY_VPN_DURATION_MS, 1000L).coerceIn(300L, 5000L)
+        vpnDurationMsCache ?: prefs(context).getLong(KEY_VPN_DURATION_MS, 500L)
+            .coerceIn(250L, 5000L)
+            .also { vpnDurationMsCache = it }
 
     fun setVpnDurationMs(context: Context, ms: Long) {
-        prefs(context).edit().putLong(KEY_VPN_DURATION_MS, ms.coerceIn(300L, 5000L)).apply()
+        val clean = ms.coerceIn(250L, 5000L)
+        vpnDurationMsCache = clean
+        prefs(context).edit().putLong(KEY_VPN_DURATION_MS, clean).apply()
     }
 
     fun getVpnTargetMode(context: Context): String =
-        prefs(context).getString(KEY_VPN_TARGET_MODE, VPN_MODE_ALL_PHONE) ?: VPN_MODE_ALL_PHONE
+        vpnTargetModeCache ?: (prefs(context).getString(KEY_VPN_TARGET_MODE, VPN_MODE_ALL_PHONE)
+            ?: VPN_MODE_ALL_PHONE).also { vpnTargetModeCache = it }
 
     fun setVpnTargetMode(context: Context, mode: String) {
         val clean = if (mode == VPN_MODE_SELECTED_APPS) VPN_MODE_SELECTED_APPS else VPN_MODE_ALL_PHONE
+        vpnTargetModeCache = clean
         prefs(context).edit().putString(KEY_VPN_TARGET_MODE, clean).apply()
     }
 
     fun getVpnTargetPackages(context: Context): Set<String> {
-        val raw = prefs(context).getString(KEY_VPN_PACKAGES_JSON, null) ?: return emptySet()
+        vpnPackagesCache?.let { return it }
+        val raw = prefs(context).getString(KEY_VPN_PACKAGES_JSON, null)
+        if (raw == null) {
+            vpnPackagesCache = emptySet()
+            return emptySet()
+        }
         val out = LinkedHashSet<String>()
         try {
             val arr = JSONArray(raw)
@@ -90,12 +108,15 @@ object AreaPrefs {
                 if (p.isNotEmpty()) out.add(p)
             }
         } catch (_: Exception) { }
+        vpnPackagesCache = out
         return out
     }
 
     fun setVpnTargetPackages(context: Context, pkgs: Set<String>) {
+        val cleaned = pkgs.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        vpnPackagesCache = cleaned.toCollection(LinkedHashSet())
         val arr = JSONArray()
-        pkgs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { arr.put(it) }
+        cleaned.forEach { arr.put(it) }
         prefs(context).edit().putString(KEY_VPN_PACKAGES_JSON, arr.toString()).apply()
     }
 
@@ -216,19 +237,25 @@ object AreaPrefs {
      */
     /** Pickup ke "khaas jagah ke naam" (jaise Mote Lala, Gurudwara). Inme se KOI EK bhi mile to chalega. */
     fun getPickupKeywords(context: Context): List<String> =
-        (prefs(context).getString(KEY_PICKUP_KEYWORDS, "") ?: "")
+        pickupKeywordsCache ?: (prefs(context).getString(KEY_PICKUP_KEYWORDS, "") ?: "")
             .split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+            .also { pickupKeywordsCache = it }
 
     fun setPickupKeywords(context: Context, words: List<String>) {
-        prefs(context).edit().putString(KEY_PICKUP_KEYWORDS, words.joinToString("\n")).apply()
+        val clean = words.map { it.trim() }.filter { it.isNotEmpty() }
+        pickupKeywordsCache = clean
+        prefs(context).edit().putString(KEY_PICKUP_KEYWORDS, clean.joinToString("\n")).apply()
     }
 
     /** Pickup max distance in km (0f = off / koi distance limit nahi). */
     fun getMaxPickupKm(context: Context): Float =
-        prefs(context).getFloat(KEY_MAX_PICKUP_KM, 0f).coerceAtLeast(0f)
+        maxPickupKmCache ?: prefs(context).getFloat(KEY_MAX_PICKUP_KM, 0f).coerceAtLeast(0f)
+            .also { maxPickupKmCache = it }
 
     fun setMaxPickupKm(context: Context, km: Float) {
-        prefs(context).edit().putFloat(KEY_MAX_PICKUP_KM, km.coerceAtLeast(0f)).apply()
+        val clean = km.coerceAtLeast(0f)
+        maxPickupKmCache = clean
+        prefs(context).edit().putFloat(KEY_MAX_PICKUP_KM, clean).apply()
     }
 
     private val PAREN_DIST_RE = Regex("\\(\\s*(\\d+(?:\\.\\d+)?)\\s*(km|m)\\s*\\)", RegexOption.IGNORE_CASE)

@@ -219,19 +219,19 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
       return;
     }
 
-    onSimulateWatcherAccept('ORDER FOUND', 'ORDER FOUND -> Accept control dhoondh raha hai');
+    onSimulateWatcherAccept('ORDER FOUND', 'ORDER FOUND -> Turbo Accept swipe');
     setScanAnimActive(true);
     window.setTimeout(() => {
       onSimulateWatcherAccept(
         'ORDER UTHA RAHA',
-        `SWIPE AUTO A DONE 30ms | ${liveAnalysis.reason}`
+        `SWIPE AUTO A DONE 18ms | ${liveAnalysis.reason}`
       );
       playOrderSound();
-    }, 280);
+    }, 45);
     window.setTimeout(() => {
       setScanAnimActive(false);
       onSimulateWatcherAccept('READY', `Last order accepted: ${liveAnalysis.reason}`);
-    }, 1500);
+    }, 500);
   };
 
   return (
@@ -363,6 +363,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
               className="font-mono-tabular h-9 rounded-lg border border-white/10 bg-[#2A2A2A] px-2.5 text-xs text-white focus:outline-none"
             >
               <option value={500}>0.5 sec</option>
+              <option value={800}>0.8 sec</option>
               <option value={1000}>1.0 sec</option>
               <option value={1500}>1.5 sec</option>
               <option value={2000}>2.0 sec</option>

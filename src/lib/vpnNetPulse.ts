@@ -21,7 +21,7 @@ export const COMMON_APK_PRESETS: ApkPreset[] = [
 
 const DEFAULT_CONFIG: VpnPulseConfig = {
   enabled: true,
-  durationMs: 1000,
+  durationMs: 500,
   targetMode: 'ALL_PHONE',
   targetPackages: ['com.theporter.android.driverapp'],
   webhookOffUrl: '',
@@ -41,7 +41,7 @@ export function getVpnPulseConfig(): VpnPulseConfig {
     return {
       enabled: parsed.enabled ?? DEFAULT_CONFIG.enabled,
       durationMs:
-        typeof parsed.durationMs === 'number' && parsed.durationMs >= 300 && parsed.durationMs <= 5000
+        typeof parsed.durationMs === 'number' && parsed.durationMs >= 250 && parsed.durationMs <= 5000
           ? parsed.durationMs
           : DEFAULT_CONFIG.durationMs,
       targetMode,

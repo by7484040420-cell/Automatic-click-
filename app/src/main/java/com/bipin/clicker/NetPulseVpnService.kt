@@ -21,14 +21,15 @@ import android.os.ParcelFileDescriptor
 class NetPulseVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    private var activeSignature: String = ""
     private val mainHandler = Handler(Looper.getMainLooper())
     private var stopRunnable: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         ensureForeground()
 
-        val durationMs = intent?.getLongExtra(EXTRA_DURATION_MS, AreaPrefs.getVpnDurationMs(this))
-            ?: AreaPrefs.getVpnDurationMs(this)
+        val durationMs = (intent?.getLongExtra(EXTRA_DURATION_MS, AreaPrefs.getVpnDurationMs(this))
+            ?: AreaPrefs.getVpnDurationMs(this)).coerceIn(250L, 5000L)
         val targetMode = intent?.getStringExtra(EXTRA_TARGET_MODE)
             ?: AreaPrefs.getVpnTargetMode(this)
         val targetPackages = intent?.getStringArrayListExtra(EXTRA_PACKAGES)
@@ -48,24 +49,27 @@ class NetPulseVpnService : VpnService() {
             stopSelf()
         }
         stopRunnable = r
-        mainHandler.postDelayed(r, durationMs.coerceIn(300L, 5000L))
+        mainHandler.postDelayed(r, durationMs)
         return START_NOT_STICKY
     }
 
     private fun ensureForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(NotificationManager::class.java)
-            if (nm?.getNotificationChannel(CHANNEL_ID) == null) {
-                val ch = NotificationChannel(
-                    CHANNEL_ID,
-                    "SwiftGate VPN Net Pulse",
-                    NotificationManager.IMPORTANCE_LOW
-                )
-                nm?.createNotificationChannel(ch)
+            if (!channelCreated) {
+                val nm = getSystemService(NotificationManager::class.java)
+                if (nm?.getNotificationChannel(CHANNEL_ID) == null) {
+                    val ch = NotificationChannel(
+                        CHANNEL_ID,
+                        "SwiftGate VPN Net Pulse",
+                        NotificationManager.IMPORTANCE_LOW
+                    )
+                    nm?.createNotificationChannel(ch)
+                }
+                channelCreated = true
             }
             val n = Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("SwiftGate Net-Off Pulse")
-                .setContentText("Temporary 1s net block active...")
+                .setContentText("Net pulse active...")
                 .setSmallIcon(R.drawable.ic_service_on)
                 .build()
             if (Build.VERSION.SDK_INT >= 34) {
@@ -77,9 +81,12 @@ class NetPulseVpnService : VpnService() {
     }
 
     private fun startBlackholeVpn(targetMode: String, targetPackages: List<String>) {
-        if (vpnInterface != null) return
+        val sig = "$targetMode:${targetPackages.joinToString(",")}"
+        if (vpnInterface != null && sig == activeSignature) return
+        if (vpnInterface != null) stopBlackholeVpn()
+
         val builder = Builder()
-            .setSession("SwiftGate 1s Net-Off")
+            .setSession("SwiftGate Net-Off")
             .addAddress("10.250.250.2", 32)
             .addRoute("0.0.0.0", 0)
             .addDnsServer("10.250.250.1")
@@ -112,13 +119,15 @@ class NetPulseVpnService : VpnService() {
         }
 
         vpnInterface = try {
-            builder.establish()
+            builder.establish().also { if (it != null) activeSignature = sig }
         } catch (_: Exception) {
+            activeSignature = ""
             null
         }
     }
 
     private fun stopBlackholeVpn() {
+        activeSignature = ""
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
@@ -135,6 +144,7 @@ class NetPulseVpnService : VpnService() {
     companion object {
         private const val CHANNEL_ID = "swiftgate_vpn_pulse"
         private const val NOTIF_ID = 4099
+        @Volatile private var channelCreated = false
         const val EXTRA_DURATION_MS = "duration_ms"
         const val EXTRA_TARGET_MODE = "target_mode"
         const val EXTRA_PACKAGES = "target_packages"

@@ -133,10 +133,10 @@ class ScreenWatcherService : Service() {
         val img = try { rd.acquireLatestImage() } catch (_: Exception) { null } ?: return
         try {
             val now = SystemClock.uptimeMillis()
-            if (now - lastCheck < 50L) return
+            if (now - lastCheck < 25L) return
             lastCheck = now
             if (AreaPrefs.isPaused(this)) return
-            if (now - lastTrigger < 350L) return
+            if (now - lastTrigger < 200L) return
 
             val plane = img.planes[0]
             val buf = plane.buffer
@@ -161,9 +161,12 @@ class ScreenWatcherService : Service() {
                 full.copyPixelsFromBuffer(tmp)
             }
             val bmp = if (full.width != w) Bitmap.createBitmap(full, 0, 0, w, h).also { full.recycle() } else full
-            // Screen watcher only provides an optional visual candidate.
-            // The live Accessibility/OCR path performs the actual order action.
-            bmp.recycle()
+            val svc = OrderWatcherService.instance
+            if (svc != null) {
+                svc.submitWatcherFrame(bmp)
+            } else {
+                bmp.recycle()
+            }
         } catch (_: Exception) {
         } finally {
             try { img.close() } catch (_: Exception) {}
