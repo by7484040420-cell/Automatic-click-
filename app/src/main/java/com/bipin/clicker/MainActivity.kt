@@ -200,46 +200,55 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openAppPickerDialog() {
+        Toast.makeText(this, "Apps list load ho rahi hai...", Toast.LENGTH_SHORT).show()
         val pm = packageManager
         val selected = AreaPrefs.getVpnTargetPackages(this).toMutableSet()
-        val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            .filter { info ->
-                info.packageName != packageName &&
-                    ((info.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
-                        pm.getLaunchIntentForPackage(info.packageName) != null ||
-                        info.packageName in selected)
-            }
-            .map { info ->
-                val label = runCatching { pm.getApplicationLabel(info).toString() }.getOrDefault(info.packageName)
-                label to info.packageName
-            }
-            .distinctBy { it.second }
-            .sortedBy { it.first.lowercase() }
+        Thread {
+            val apps = runCatching {
+                pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                    .filter { info ->
+                        info.packageName != packageName &&
+                            ((info.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
+                                pm.getLaunchIntentForPackage(info.packageName) != null ||
+                                info.packageName in selected)
+                    }
+                    .map { info ->
+                        val label = runCatching { pm.getApplicationLabel(info).toString() }
+                            .getOrDefault(info.packageName)
+                        label to info.packageName
+                    }
+                    .distinctBy { it.second }
+                    .sortedBy { it.first.lowercase() }
+            }.getOrDefault(emptyList())
 
-        if (apps.isEmpty()) {
-            showCustomPackageDialog(selected)
-            return
-        }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (apps.isEmpty()) {
+                    showCustomPackageDialog(selected)
+                    return@runOnUiThread
+                }
 
-        val labels = apps.map { "${it.first}\n(${it.second})" }.toTypedArray()
-        val checked = BooleanArray(apps.size) { i -> apps[i].second in selected }
+                val labels = apps.map { "${it.first}\n(${it.second})" }.toTypedArray()
+                val checked = BooleanArray(apps.size) { i -> apps[i].second in selected }
 
-        AlertDialog.Builder(this)
-            .setTitle("Chune Hue APKs (1s Net Off)")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                val pkg = apps[which].second
-                if (isChecked) selected.add(pkg) else selected.remove(pkg)
+                AlertDialog.Builder(this)
+                    .setTitle("Chune Hue APKs (1s Net Off)")
+                    .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                        val pkg = apps[which].second
+                        if (isChecked) selected.add(pkg) else selected.remove(pkg)
+                    }
+                    .setPositiveButton("Save") { _, _ ->
+                        AreaPrefs.setVpnTargetPackages(this, selected)
+                        refreshStatus()
+                    }
+                    .setNeutralButton("Custom Package") { _, _ ->
+                        AreaPrefs.setVpnTargetPackages(this, selected)
+                        showCustomPackageDialog(selected)
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
             }
-            .setPositiveButton("Save") { _, _ ->
-                AreaPrefs.setVpnTargetPackages(this, selected)
-                refreshStatus()
-            }
-            .setNeutralButton("Custom Package") { _, _ ->
-                AreaPrefs.setVpnTargetPackages(this, selected)
-                showCustomPackageDialog(selected)
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }.start()
     }
 
     private fun showCustomPackageDialog(selected: MutableSet<String>) {

@@ -205,23 +205,35 @@
                 <Button
                     android:id="@+id/btnVpnModeAll"
                     android:layout_width="0dp"
-                    android:layout_height="42dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="46dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="4dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:maxLines="2"
                     android:text="Poora Phone"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="11.5sp"
                     android:textStyle="bold" />
 
                 <Button
                     android:id="@+id/btnVpnModeApps"
                     android:layout_width="0dp"
-                    android:layout_height="42dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="46dp"
                     android:layout_weight="1"
                     android:layout_marginStart="4dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:maxLines="2"
                     android:text="Chune Hue APKs"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="11.5sp"
                     android:textStyle="bold" />
             </LinearLayout>
 
@@ -246,8 +258,13 @@
                 <Button
                     android:id="@+id/btnPickApps"
                     android:layout_width="match_parent"
-                    android:layout_height="40dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="44dp"
                     android:layout_marginTop="6dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
                     android:text="Apps Chunein (APK List Kholein)"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -261,20 +278,32 @@
                 <Button
                     android:id="@+id/btnVpnDuration"
                     android:layout_width="0dp"
-                    android:layout_height="40dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="44dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="4dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:maxLines="2"
                     android:text="Timer: 1.0s"
-                    android:textSize="12sp" />
+                    android:textSize="11.5sp" />
 
                 <Button
                     android:id="@+id/btnVpnTest"
                     android:layout_width="0dp"
-                    android:layout_height="40dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="44dp"
                     android:layout_weight="1"
                     android:layout_marginStart="4dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:maxLines="2"
                     android:text="Test 1s Net-Off"
-                    android:textSize="12sp" />
+                    android:textSize="11.5sp" />
             </LinearLayout>
         </LinearLayout>
 

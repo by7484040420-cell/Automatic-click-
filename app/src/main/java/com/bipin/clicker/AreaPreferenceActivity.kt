@@ -4,6 +4,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -13,6 +15,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.bipin.clicker.databinding.ActivityAreaPreferenceBinding
 
@@ -24,6 +27,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
     private var currentTab = Tab.PICKUP
     private var allCities: Map<String, List<String>> = emptyMap()
+    private var verifiedCityNames: Set<String> = emptySet()
 
     // Working (unsaved) selections: A = Accept, R = Reject
     private val workingPickupA = mutableMapOf<String, MutableSet<String>>()
@@ -32,11 +36,16 @@ class AreaPreferenceActivity : AppCompatActivity() {
     private val workingDropR = mutableMapOf<String, MutableSet<String>>()
     private var pickupNoRestriction = false
 
+    private val expandedCities = mutableSetOf<String>()
+    private val searchHandler = Handler(Looper.getMainLooper())
+    private var pendingSearchRunnable: Runnable? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityAreaPreferenceBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        verifiedCityNames = LocationRepository.loadVerifiedCities(this).keys
         allCities = LocationRepository.loadAllCitiesWithCustom(this)
 
         loadWorkingStateFrom(AreaPrefs.getPickupSelections(this), workingPickupA)
@@ -68,7 +77,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         binding.btnSaveAreas.setOnClickListener { saveAndFinish() }
 
         binding.btnResetAll.setOnClickListener {
-            androidx.appcompat.app.AlertDialog.Builder(this)
+            AlertDialog.Builder(this)
                 .setTitle("Sab location hatao?")
                 .setMessage("Pickup (A/R), Drop (A/R) aur khaas naam sab hat jayenge.")
                 .setPositiveButton("Haan, sab hatao") { _, _ ->
@@ -94,12 +103,20 @@ class AreaPreferenceActivity : AppCompatActivity() {
         binding.locationSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                renderCities()
+                pendingSearchRunnable?.let { searchHandler.removeCallbacks(it) }
+                val r = Runnable { renderCities() }
+                pendingSearchRunnable = r
+                searchHandler.postDelayed(r, 180L)
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
 
         switchTab(Tab.PICKUP)
+    }
+
+    override fun onDestroy() {
+        pendingSearchRunnable?.let { searchHandler.removeCallbacks(it) }
+        super.onDestroy()
     }
 
     private fun loadWorkingStateFrom(
@@ -134,6 +151,35 @@ class AreaPreferenceActivity : AppCompatActivity() {
         }
     }
 
+    private fun styleModeBox(tv: TextView, isAcceptBox: Boolean, isActive: Boolean) {
+        val dp = resources.displayMetrics.density
+        tv.setTextColor(
+            when {
+                isActive -> Color.WHITE
+                isAcceptBox -> Color.parseColor("#81C784")
+                else -> Color.parseColor("#EF5350")
+            }
+        )
+        tv.background = GradientDrawable().apply {
+            cornerRadius = 8 * dp
+            setColor(
+                when {
+                    isActive && isAcceptBox -> Color.parseColor("#43A047")
+                    isActive && !isAcceptBox -> Color.parseColor("#C62828")
+                    else -> Color.parseColor("#2A2A2A")
+                }
+            )
+            setStroke(
+                (1 * dp).toInt().coerceAtLeast(1),
+                when {
+                    isActive && isAcceptBox -> Color.parseColor("#81C784")
+                    isActive && !isAcceptBox -> Color.parseColor("#EF5350")
+                    else -> Color.parseColor("#424242")
+                }
+            )
+        }
+    }
+
     private fun makeModeBox(label: String, isAcceptBox: Boolean, isActive: Boolean): TextView {
         val dp = resources.displayMetrics.density
         val sizePx = (36 * dp).toInt()
@@ -142,34 +188,10 @@ class AreaPreferenceActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(
-                when {
-                    isActive -> Color.WHITE
-                    isAcceptBox -> Color.parseColor("#81C784")
-                    else -> Color.parseColor("#EF5350")
-                }
-            )
-            background = GradientDrawable().apply {
-                cornerRadius = 8 * dp
-                setColor(
-                    when {
-                        isActive && isAcceptBox -> Color.parseColor("#43A047")
-                        isActive && !isAcceptBox -> Color.parseColor("#C62828")
-                        else -> Color.parseColor("#2A2A2A")
-                    }
-                )
-                setStroke(
-                    (1 * dp).toInt(),
-                    when {
-                        isActive && isAcceptBox -> Color.parseColor("#81C784")
-                        isActive && !isAcceptBox -> Color.parseColor("#EF5350")
-                        else -> Color.parseColor("#424242")
-                    }
-                )
-            }
             layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
                 marginStart = (6 * dp).toInt()
             }
+            styleModeBox(this, isAcceptBox, isActive)
         }
     }
 
@@ -179,9 +201,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         val rejectMap = activeRejectMap()
         val query = binding.locationSearch.text?.toString()?.trim()?.lowercase().orEmpty()
         val rawQuery = binding.locationSearch.text?.toString()?.trim().orEmpty()
-        val verifiedCityNames = LocationRepository.loadVerifiedCities(this).keys
 
-        // Helper banner showing A = Accept, R = Reject
         binding.cityContainer.addView(TextView(this).apply {
             text = "Har location ke aage [A] = Accept, [R] = Reject (1s Net-Off)"
             setTextColor(Color.parseColor("#B0BEC5"))
@@ -198,7 +218,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
             setOnClickListener { showCreateFolderDialog() }
         })
 
-        // Unknown search quick-add with + City (A) and + City (R)
         if (rawQuery.isNotEmpty()) {
             val exact = allCities.values.any { list -> list.any { it.equals(rawQuery, ignoreCase = true) } }
             if (!exact) {
@@ -221,6 +240,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                             allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
                             activeRejectMap()[cityName]?.remove(niceName)
                             activeAcceptMap().getOrPut(cityName) { mutableSetOf() }.add(niceName)
+                            expandedCities.add(cityName)
                             binding.locationSearch.setText("")
                             Toast.makeText(
                                 this@AreaPreferenceActivity,
@@ -236,6 +256,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                             allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
                             activeAcceptMap()[cityName]?.remove(niceName)
                             activeRejectMap().getOrPut(cityName) { mutableSetOf() }.add(niceName)
+                            expandedCities.add(cityName)
                             binding.locationSearch.setText("")
                             Toast.makeText(
                                 this@AreaPreferenceActivity,
@@ -256,6 +277,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
             }
             if (query.isNotEmpty() && localities.isEmpty() && !city.lowercase().contains(query)) continue
 
+            val isExpanded = if (query.isNotEmpty()) localities.size <= 80 else city in expandedCities
             val acceptSet = acceptMap[city] ?: mutableSetOf()
             val rejectSet = rejectMap[city] ?: mutableSetOf()
             val isAllAccept = acceptSet.contains(AreaPrefs.ALL_MARKER)
@@ -263,7 +285,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
             val section = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, 10, 0, 10)
+                setPadding(0, 8, 0, 8)
             }
 
             val headerRow = LinearLayout(this).apply {
@@ -272,7 +294,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
             }
 
             val expandArrow = TextView(this).apply {
-                text = (if (query.isNotEmpty()) "\u25BE " else "\u25B8 ") + "$city (${localities.size})"
+                text = (if (isExpanded) "\u25BE " else "\u25B8 ") + "$city (${localities.size})"
                 textSize = 15f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.WHITE)
@@ -294,7 +316,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     setTextColor(0xFFEF5350.toInt())
                     setPadding(12, 8, 4, 8)
                     setOnClickListener {
-                        androidx.appcompat.app.AlertDialog.Builder(this@AreaPreferenceActivity)
+                        AlertDialog.Builder(this@AreaPreferenceActivity)
                             .setTitle("\"$city\" folder hatayein?")
                             .setMessage("Is poore folder ki sab jagah hat jayengi.")
                             .setPositiveButton("Haan, hatao") { _, _ ->
@@ -303,6 +325,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                                 workingDropA.remove(city)
                                 workingPickupR.remove(city)
                                 workingDropR.remove(city)
+                                expandedCities.remove(city)
                                 allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
                                 renderCities()
                             }
@@ -314,28 +337,23 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
             val childContainer = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                visibility = if (query.isNotEmpty()) View.VISIBLE else View.GONE
-                setPadding(18, 4, 0, 4)
+                visibility = if (isExpanded) View.VISIBLE else View.GONE
+                setPadding(16, 4, 0, 4)
             }
+
+            var childrenBuilt = false
+            var displayLimit = 60
 
             fun refreshHeaderBoxes() {
                 val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
                 val nowAllR = rejectMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
-                val idxA = headerRow.indexOfChild(btnCityA)
-                val idxR = headerRow.indexOfChild(btnCityR)
-                btnCityA.setTextColor(if (nowAllA) Color.WHITE else Color.parseColor("#81C784"))
-                (btnCityA.background as? GradientDrawable)?.setColor(
-                    Color.parseColor(if (nowAllA) "#43A047" else "#2A2A2A")
-                )
-                btnCityR.setTextColor(if (nowAllR) Color.WHITE else Color.parseColor("#EF5350"))
-                (btnCityR.background as? GradientDrawable)?.setColor(
-                    Color.parseColor(if (nowAllR) "#C62828" else "#2A2A2A")
-                )
-                if (idxA >= 0 && idxR >= 0) headerRow.invalidate()
+                styleModeBox(btnCityA, isAcceptBox = true, isActive = nowAllA)
+                styleModeBox(btnCityR, isAcceptBox = false, isActive = nowAllR)
             }
 
-            fun rebuildChildRows() {
+            fun buildChildRows() {
                 childContainer.removeAllViews()
+                childrenBuilt = true
                 val curA = acceptMap[city] ?: mutableSetOf()
                 val curR = rejectMap[city] ?: mutableSetOf()
                 val curAllA = curA.contains(AreaPrefs.ALL_MARKER)
@@ -365,6 +383,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                         allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
                         rejectMap[city]?.remove(value)
                         acceptMap.getOrPut(city) { mutableSetOf() }.add(value)
+                        expandedCities.add(city)
                         renderCities()
                     }
                 }
@@ -377,6 +396,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                         allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
                         acceptMap[city]?.remove(value)
                         rejectMap.getOrPut(city) { mutableSetOf() }.add(value)
+                        expandedCities.add(city)
                         renderCities()
                     }
                 }
@@ -385,7 +405,8 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 addRow.addView(addRBtn)
                 childContainer.addView(addRow)
 
-                for (locality in localities) {
+                val slice = if (localities.size > displayLimit) localities.subList(0, displayLimit) else localities
+                for (locality in slice) {
                     val locReject = curAllR || curR.contains(locality)
                     val locAccept = !locReject && (curAllA || curA.contains(locality))
 
@@ -393,15 +414,10 @@ class AreaPreferenceActivity : AppCompatActivity() {
                         orientation = LinearLayout.HORIZONTAL
                         gravity = Gravity.CENTER_VERTICAL
                         setPadding(8, 6, 4, 6)
-                        background = GradientDrawable().apply {
-                            cornerRadius = 10f
-                            setColor(
-                                when {
-                                    locReject -> Color.argb(45, 198, 40, 40)
-                                    locAccept -> Color.argb(45, 67, 160, 71)
-                                    else -> Color.TRANSPARENT
-                                }
-                            )
+                        if (locReject) {
+                            setBackgroundColor(Color.argb(45, 198, 40, 40))
+                        } else if (locAccept) {
+                            setBackgroundColor(Color.argb(45, 67, 160, 71))
                         }
                     }
 
@@ -415,22 +431,36 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     val boxA = makeModeBox("A", isAcceptBox = true, isActive = locAccept)
                     val boxR = makeModeBox("R", isAcceptBox = false, isActive = locReject)
 
+                    fun updateRowVisuals(acceptNow: Boolean, rejectNow: Boolean) {
+                        styleModeBox(boxA, isAcceptBox = true, isActive = acceptNow)
+                        styleModeBox(boxR, isAcceptBox = false, isActive = rejectNow)
+                        row.setBackgroundColor(
+                            when {
+                                rejectNow -> Color.argb(45, 198, 40, 40)
+                                acceptNow -> Color.argb(45, 67, 160, 71)
+                                else -> Color.TRANSPARENT
+                            }
+                        )
+                    }
+
                     boxA.setOnClickListener {
                         ensurePickupAcceptActive()
-                        // Remove ALL_MARKER if toggling off a city-wide reject
                         rejectMap[city]?.remove(AreaPrefs.ALL_MARKER)
                         rejectMap[city]?.remove(locality)
                         if (rejectMap[city]?.isEmpty() == true) rejectMap.remove(city)
 
                         val setA = acceptMap.getOrPut(city) { mutableSetOf() }
+                        val wasAllA = setA.contains(AreaPrefs.ALL_MARKER)
                         if (setA.contains(locality)) {
                             setA.remove(locality)
-                        } else if (!curAllA) {
+                        } else if (!wasAllA) {
                             setA.add(locality)
                         }
                         if (setA.isEmpty()) acceptMap.remove(city)
                         refreshHeaderBoxes()
-                        rebuildChildRows()
+                        val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
+                        val nowA = nowAllA || acceptMap[city]?.contains(locality) == true
+                        updateRowVisuals(acceptNow = nowA, rejectNow = false)
                     }
 
                     boxR.setOnClickListener {
@@ -444,7 +474,11 @@ class AreaPreferenceActivity : AppCompatActivity() {
                             if (acceptMap[city]?.isEmpty() == true) acceptMap.remove(city)
                         }
                         refreshHeaderBoxes()
-                        rebuildChildRows()
+                        val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
+                        val nowAllR = rejectMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
+                        val nowR = nowAllR || rejectMap[city]?.contains(locality) == true
+                        val nowA = !nowR && (nowAllA || acceptMap[city]?.contains(locality) == true)
+                        updateRowVisuals(acceptNow = nowA, rejectNow = nowR)
                     }
 
                     row.addView(tvLoc)
@@ -452,12 +486,34 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     row.addView(boxR)
                     childContainer.addView(row)
                 }
+
+                if (localities.size > displayLimit) {
+                    val remaining = localities.size - displayLimit
+                    childContainer.addView(Button(this@AreaPreferenceActivity).apply {
+                        text = "Aur $remaining jagah dikhayein (search se jaldi milega)"
+                        setOnClickListener {
+                            displayLimit += 80
+                            buildChildRows()
+                        }
+                    })
+                }
             }
-            rebuildChildRows()
+
+            // ONLY build child rows right now if this city is actually expanded!
+            if (isExpanded) {
+                buildChildRows()
+            }
 
             expandArrow.setOnClickListener {
                 val nowVisible = childContainer.visibility != View.VISIBLE
-                childContainer.visibility = if (nowVisible) View.VISIBLE else View.GONE
+                if (nowVisible) {
+                    expandedCities.add(city)
+                    if (!childrenBuilt) buildChildRows()
+                    childContainer.visibility = View.VISIBLE
+                } else {
+                    expandedCities.remove(city)
+                    childContainer.visibility = View.GONE
+                }
                 expandArrow.text = (if (nowVisible) "\u25BE " else "\u25B8 ") + "$city (${localities.size})"
             }
 
@@ -472,7 +528,11 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     if (rejectMap[city]?.isEmpty() == true) rejectMap.remove(city)
                 }
                 refreshHeaderBoxes()
-                rebuildChildRows()
+                if (childContainer.visibility == View.VISIBLE) {
+                    buildChildRows()
+                } else {
+                    childrenBuilt = false
+                }
             }
 
             btnCityR.setOnClickListener {
@@ -484,7 +544,11 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     acceptMap.remove(city)
                 }
                 refreshHeaderBoxes()
-                rebuildChildRows()
+                if (childContainer.visibility == View.VISIBLE) {
+                    buildChildRows()
+                } else {
+                    childrenBuilt = false
+                }
             }
 
             section.addView(headerRow)
@@ -527,7 +591,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         }
         box.addView(nameInput)
 
-        androidx.appcompat.app.AlertDialog.Builder(this)
+        AlertDialog.Builder(this)
             .setView(box)
             .setPositiveButton("Banao") { _, _ ->
                 val name = nameInput.text.toString().trim()
@@ -557,7 +621,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         box.addView(nameInput)
         box.addView(placesInput)
 
-        androidx.appcompat.app.AlertDialog.Builder(this)
+        AlertDialog.Builder(this)
             .setView(box)
             .setPositiveButton("Banao") { _, _ ->
                 val name = nameInput.text.toString().trim()
