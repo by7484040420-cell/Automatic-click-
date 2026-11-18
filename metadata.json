@@ -1,0 +1,5 @@
+{
+  "name": "SwiftGate",
+  "description": "Location-based Auto-Accept controller with Pickup/Drop area preferences, custom locality folders, swipe zone calibration, permission setup, and license management.",
+  "requestFramePermissions": []
+}
