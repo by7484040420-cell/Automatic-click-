@@ -28,6 +28,7 @@ object AreaPrefs {
     private const val KEY_CUSTOM_JSON = "custom_localities_json"
     private const val KEY_PAUSED = "is_paused"
     private const val KEY_PICKUP_KEYWORDS = "pickup_keywords"
+    private const val KEY_MAX_PICKUP_KM = "max_pickup_km"
     private const val KEY_VPN_ENABLED = "vpn_pulse_enabled"
     private const val KEY_VPN_DURATION_MS = "vpn_pulse_duration_ms"
     private const val KEY_VPN_TARGET_MODE = "vpn_pulse_target_mode"
@@ -222,6 +223,29 @@ object AreaPrefs {
         prefs(context).edit().putString(KEY_PICKUP_KEYWORDS, words.joinToString("\n")).apply()
     }
 
+    /** Pickup max distance in km (0f = off / koi distance limit nahi). */
+    fun getMaxPickupKm(context: Context): Float =
+        prefs(context).getFloat(KEY_MAX_PICKUP_KM, 0f).coerceAtLeast(0f)
+
+    fun setMaxPickupKm(context: Context, km: Float) {
+        prefs(context).edit().putFloat(KEY_MAX_PICKUP_KM, km.coerceAtLeast(0f)).apply()
+    }
+
+    private val PAREN_DIST_RE = Regex("\\(\\s*(\\d+(?:\\.\\d+)?)\\s*(km|m)\\s*\\)", RegexOption.IGNORE_CASE)
+    private val DIST_KM_RE = Regex("(\\d+(?:\\.\\d+)?)\\s*km\\b", RegexOption.IGNORE_CASE)
+    private val DIST_M_RE = Regex("(\\d+(?:\\.\\d+)?)\\s*m\\b", RegexOption.IGNORE_CASE)
+
+    fun extractDistanceKm(text: String): Float? {
+        PAREN_DIST_RE.find(text)?.let { m ->
+            val v = m.groupValues.getOrNull(1)?.toFloatOrNull() ?: return@let
+            val unit = m.groupValues.getOrNull(2)?.lowercase() ?: "km"
+            return if (unit == "m") v / 1000f else v
+        }
+        DIST_KM_RE.find(text)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.let { return it }
+        DIST_M_RE.find(text)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.let { return it / 1000f }
+        return null
+    }
+
     fun matchesRejectText(context: Context, rawScreenText: String): Boolean {
         val rejectPickup = getRejectPickupSelections(context)
         val rejectDrop = getRejectDropSelections(context)
@@ -236,6 +260,7 @@ object AreaPrefs {
         val dropSelections = getDropSelections(context)
         val pickupSelections = getPickupSelections(context)
         val pickupKeywords = getPickupKeywords(context)
+        val maxPickupKm = getMaxPickupKm(context)
 
         // 1. Pehle Reject (R) check: agar Pickup ya Drop par R match ho to order accept NAHI hoga
         if (matchesRejectText(context, rawScreenText)) return false
@@ -247,16 +272,21 @@ object AreaPrefs {
 
         if (!selectionsMatchText(context, dropSelections, dropText)) return false
 
-        // 3. Accept (A) Pickup check
-        if (pickupSelections.isEmpty() && pickupKeywords.isEmpty()) return true
+        // 3. Accept (A) Pickup check: Location (A) YA Khas Naam YA Max Pickup KM (jo bhi set ho)
+        if (pickupSelections.isEmpty() && pickupKeywords.isEmpty() && maxPickupKm <= 0f) return true
         if (pickupSelections.isNotEmpty() && selectionsMatchText(context, pickupSelections, pickupText)) return true
-        return pickupKeywords.any { containsWord(pickupText, normalize(it)) }
+        if (pickupKeywords.any { containsWord(pickupText, normalize(it)) }) return true
+        if (maxPickupKm > 0f) {
+            val pickupDistKm = extractDistanceKm(pickupText)
+            if (pickupDistKm != null && pickupDistKm <= maxPickupKm + 0.0001f) return true
+        }
+        return false
     }
 
     // ---------- Order card ko pickup / drop me todna ----------
 
     private val ACCEPT_IN = Regex("accept\\s*in", RegexOption.IGNORE_CASE)
-    private val KM_HEADER = Regex("\\(\\s*\\d+(?:\\.\\d+)?\\s*km\\s*\\)")
+    private val KM_HEADER = Regex("\\(\\s*\\d+(?:\\.\\d+)?\\s*(?:km|m)\\s*\\)")
 
     /**
      * "Accept in Ns" ke baad ka text peeche wali screen ka hota hai (galat match karata tha),

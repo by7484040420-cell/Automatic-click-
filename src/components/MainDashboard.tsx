@@ -18,6 +18,7 @@ import {
 import {
   analyzeScreenText,
   getDropSelections,
+  getMaxPickupKm,
   getPickupKeywords,
   getPickupSelections,
   getRejectDropSelections,
@@ -169,6 +170,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
   const rejectPickupSelections = getRejectPickupSelections();
   const rejectDropSelections = getRejectDropSelections();
   const pickupKeywords = getPickupKeywords();
+  const maxPickupKm = getMaxPickupKm();
 
   const pickupACount = Object.keys(pickupSelections).length;
   const pickupRCount = Object.keys(rejectPickupSelections).length;
@@ -259,14 +261,18 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
         </div>
       )}
 
-      {/* Rules Summary Box (A & R rules) */}
+      {/* Rules Summary Box (A, R & Distance rules) */}
       <div className="rounded-xl border border-white/10 bg-[#1E1E1E] p-4 text-sm leading-relaxed">
         <p className="text-[#B0BEC5]">
-          {pickupACount === 0 && pickupKeywords.length === 0
+          {pickupACount === 0 && pickupKeywords.length === 0 && maxPickupKm <= 0
             ? 'Pickup (A): koi restriction nahi'
-            : `Pickup (A): ${pickupACount} city set${
-                pickupKeywords.length > 0 ? ` · ${pickupKeywords.length} khaas naam` : ''
-              }`}
+            : `Pickup (A): ${[
+                pickupACount > 0 ? `${pickupACount} city set` : '',
+                pickupKeywords.length > 0 ? `${pickupKeywords.length} khaas naam` : '',
+                maxPickupKm > 0 ? `<= ${maxPickupKm} km` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')}`}
           {pickupRCount > 0 && (
             <span className="ml-2 text-[#EF5350]">· Reject (R): {pickupRCount} city</span>
           )}
@@ -650,11 +656,18 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
         />
 
         {/* Real-time Split & Match Breakdown */}
-        <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl bg-[#141414] p-3 text-xs sm:grid-cols-2">
+        <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl bg-[#141414] p-3 text-xs sm:grid-cols-3">
           <div>
             <span className="text-[#9E9E9E]">Parsed Pickup Segment:</span>
             <p className="font-mono-tabular mt-0.5 truncate text-white">
               {liveAnalysis.pickupText || '—'}
+            </p>
+          </div>
+          <div>
+            <span className="text-[#9E9E9E]">Pickup Dist / Rule:</span>
+            <p className="font-mono-tabular mt-0.5 truncate text-[#81C784]">
+              {liveAnalysis.pickupDistanceKm != null ? `${liveAnalysis.pickupDistanceKm} km` : '—'}
+              {maxPickupKm > 0 ? ` (Max <= ${maxPickupKm} km)` : ' (Dist OFF)'}
             </p>
           </div>
           <div>

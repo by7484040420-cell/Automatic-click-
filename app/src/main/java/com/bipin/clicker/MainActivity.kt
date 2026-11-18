@@ -385,11 +385,23 @@ class MainActivity : AppCompatActivity() {
             if (overlayOn) "\u2705 Overlay Permission: ON" else "\u274C Overlay Permission: OFF"
 
         val pickup = AreaPrefs.getPickupSelections(this)
+        val pickupKeywords = AreaPrefs.getPickupKeywords(this)
+        val maxPickupKm = AreaPrefs.getMaxPickupKm(this)
         val drop = AreaPrefs.getDropSelections(this)
         val rejectPickup = AreaPrefs.getRejectPickupSelections(this)
         val rejectDrop = AreaPrefs.getRejectDropSelections(this)
+        val kmLabel = if (maxPickupKm > 0f) {
+            if (maxPickupKm % 1f == 0f) "${maxPickupKm.toInt()} km" else "$maxPickupKm km"
+        } else ""
         binding.statusRules.text = buildString {
-            append(if (pickup.isEmpty()) "Pickup (A): koi restriction nahi" else "Pickup (A): ${pickup.size} city set")
+            val parts = mutableListOf<String>()
+            if (pickup.isNotEmpty()) parts.add("${pickup.size} city set")
+            if (pickupKeywords.isNotEmpty()) parts.add("${pickupKeywords.size} khaas naam")
+            if (kmLabel.isNotEmpty()) parts.add("<= $kmLabel")
+            append(
+                if (parts.isEmpty()) "Pickup (A): koi restriction nahi"
+                else "Pickup (A): ${parts.joinToString(" · ")}"
+            )
             if (rejectPickup.isNotEmpty()) append(" · Reject (R): ${rejectPickup.size}")
             append("\n")
             append(if (drop.isEmpty()) "Drop (A): ABHI SET NAHI HAI (kuch bhi accept nahi hoga)" else "Drop (A): ${drop.size} city set")

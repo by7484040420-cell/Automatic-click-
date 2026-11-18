@@ -65,6 +65,7 @@ export interface MatchAnalysis {
   reason: string;
   pickupText: string;
   dropText: string;
+  pickupDistanceKm?: number | null;
   isTripDetails: boolean;
   hasAcceptWord: boolean;
   pickupMatchedBy: string | null;

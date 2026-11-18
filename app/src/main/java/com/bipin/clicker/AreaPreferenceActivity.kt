@@ -56,6 +56,22 @@ class AreaPreferenceActivity : AppCompatActivity() {
         pickupNoRestriction = AreaPrefs.getPickupSelections(this).isEmpty() &&
             AreaPrefs.getPickupKeywords(this).isEmpty()
         binding.pickupKeywords.setText(AreaPrefs.getPickupKeywords(this).joinToString(", "))
+        val savedMaxKm = AreaPrefs.getMaxPickupKm(this)
+        binding.etMaxPickupKm.setText(
+            if (savedMaxKm > 0f) {
+                if (savedMaxKm % 1f == 0f) savedMaxKm.toInt().toString() else savedMaxKm.toString()
+            } else {
+                ""
+            }
+        )
+
+        binding.btnDistOff.setOnClickListener { binding.etMaxPickupKm.setText("") }
+        binding.btnDist05.setOnClickListener { binding.etMaxPickupKm.setText("0.5") }
+        binding.btnDist06.setOnClickListener { binding.etMaxPickupKm.setText("0.6") }
+        binding.btnDist1.setOnClickListener { binding.etMaxPickupKm.setText("1") }
+        binding.btnDist2.setOnClickListener { binding.etMaxPickupKm.setText("2") }
+        binding.btnDist3.setOnClickListener { binding.etMaxPickupKm.setText("3") }
+        binding.btnDist5.setOnClickListener { binding.etMaxPickupKm.setText("5") }
 
         binding.pickupKeywords.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -79,7 +95,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         binding.btnResetAll.setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("Sab location hatao?")
-                .setMessage("Pickup (A/R), Drop (A/R) aur khaas naam sab hat jayenge.")
+                .setMessage("Pickup (A/R), Drop (A/R), distance aur khaas naam sab hat jayenge.")
                 .setPositiveButton("Haan, sab hatao") { _, _ ->
                     workingPickupA.clear()
                     workingDropA.clear()
@@ -87,12 +103,14 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     workingDropR.clear()
                     pickupNoRestriction = true
                     binding.pickupKeywords.setText("")
+                    binding.etMaxPickupKm.setText("")
                     binding.cbNoPickupRestriction.isChecked = true
                     AreaPrefs.setPickupSelections(this, emptyMap())
                     AreaPrefs.setDropSelections(this, emptyMap())
                     AreaPrefs.setRejectPickupSelections(this, emptyMap())
                     AreaPrefs.setRejectDropSelections(this, emptyMap())
                     AreaPrefs.setPickupKeywords(this, emptyList())
+                    AreaPrefs.setMaxPickupKm(this, 0f)
                     renderCities()
                     Toast.makeText(this, "Sab location (A aur R) hat gaye", Toast.LENGTH_SHORT).show()
                 }
@@ -132,6 +150,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         binding.btnTabPickup.alpha = if (tab == Tab.PICKUP) 1f else 0.5f
         binding.btnTabDrop.alpha = if (tab == Tab.DROP) 1f else 0.5f
         binding.cbNoPickupRestriction.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
+        binding.pickupDistanceBox.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
         binding.tvKeywordHelp.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
         binding.pickupKeywords.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
         binding.cbNoPickupRestriction.isChecked = pickupNoRestriction
@@ -647,11 +666,13 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 .split(Regex("[,;\\n]+")).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             AreaPrefs.setPickupKeywords(this, words)
         }
+        val maxKm = binding.etMaxPickupKm.text.toString().trim().replace(',', '.').toFloatOrNull()?.coerceAtLeast(0f) ?: 0f
+        AreaPrefs.setMaxPickupKm(this, maxKm)
         AreaPrefs.setDropSelections(this, workingDropA)
         AreaPrefs.setRejectPickupSelections(this, workingPickupR)
         AreaPrefs.setRejectDropSelections(this, workingDropR)
 
-        Toast.makeText(this, "Saved (A aur R rules)", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Saved (A, R & Distance rules)", Toast.LENGTH_SHORT).show()
         finish()
     }
 }

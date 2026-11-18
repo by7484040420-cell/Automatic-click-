@@ -14,12 +14,14 @@ import {
   addCustomLocalities,
   addCustomLocality,
   getDropSelections,
+  getMaxPickupKm,
   getPickupKeywords,
   getPickupSelections,
   getRejectDropSelections,
   getRejectPickupSelections,
   removeCustomCity,
   setDropSelections,
+  setMaxPickupKm,
   setPickupKeywords,
   setPickupSelections,
   setRejectDropSelections,
@@ -88,6 +90,10 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   const [keywordsText, setKeywordsText] = useState<string>(() =>
     getPickupKeywords().join(', ')
   );
+  const [maxPickupKmText, setMaxPickupKmText] = useState<string>(() => {
+    const saved = getMaxPickupKm();
+    return saved > 0 ? String(saved) : '';
+  });
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedCities, setExpandedCities] = useState<Record<string, boolean>>({});
   const [inlineInputs, setInlineInputs] = useState<Record<string, string>>({});
@@ -330,13 +336,15 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     setWorkingDropR({});
     setPickupNoRestriction(true);
     setKeywordsText('');
+    setMaxPickupKmText('');
     setPickupSelections({});
     setDropSelections({});
     setRejectPickupSelections({});
     setRejectDropSelections({});
     setPickupKeywords([]);
+    setMaxPickupKm(0);
     setShowResetConfirm(false);
-    onNotify('Sab location (A aur R) hat gaye');
+    onNotify('Sab location (A aur R) aur distance hat gaye');
   };
 
   const handleConfirmDeleteFolder = () => {
@@ -371,6 +379,9 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
       );
       setPickupKeywords(words);
     }
+    const parsedKm = Number(maxPickupKmText.trim());
+    setMaxPickupKm(Number.isFinite(parsedKm) && parsedKm > 0 ? parsedKm : 0);
+
     const dropAOut = serializeSelectionMap(workingDropA);
     setDropSelections(dropAOut);
     setRejectPickupSelections(serializeSelectionMap(workingPickupR));
@@ -379,7 +390,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     if (Object.keys(dropAOut).length === 0) {
       onSaved('Dhyan dein: Drop (A) set kiye bina koi bhi order auto-accept nahi hoga');
     } else {
-      onSaved('Saved (A & R rules updated)');
+      onSaved('Saved (A, R & Distance rules updated)');
     }
   };
 
@@ -387,6 +398,8 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   const pickupRCount = countMapEntries(workingPickupR);
   const dropACount = countMapEntries(workingDropA);
   const dropRCount = countMapEntries(workingDropR);
+  const parsedPreviewKm = Number(maxPickupKmText.trim());
+  const activeMaxKm = Number.isFinite(parsedPreviewKm) && parsedPreviewKm > 0 ? parsedPreviewKm : 0;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
@@ -400,7 +413,8 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
             <span className="font-bold text-[#EF5350]">R</span> (Reject) boxes hain
           </p>
           <p className="font-mono-tabular mt-1 text-xs text-[#B0BEC5]">
-            Pickup: {pickupNoRestriction ? 'All A' : `${pickupACount} A`} / {pickupRCount} R
+            Pickup: {pickupNoRestriction ? 'Location Off' : `${pickupACount} A`} / {pickupRCount} R
+            {activeMaxKm > 0 ? ` · <= ${activeMaxKm} km` : ''}
             <span aria-hidden="true"> · </span>
             Drop: {dropACount} A / {dropRCount} R
           </p>
@@ -454,7 +468,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
         />
       </div>
 
-      {/* Pickup restriction & special keywords (only on PICKUP tab) */}
+      {/* Pickup restriction, distance & special keywords (only on PICKUP tab) */}
       {currentTab === 'PICKUP' && (
         <div className="mb-4 space-y-3 rounded-xl border border-white/10 bg-[#1E1E1E] p-4">
           <label className="flex min-h-[40px] cursor-pointer items-center gap-3 text-sm font-medium text-white select-none">
@@ -464,8 +478,54 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
               onChange={(e) => setPickupNoRestriction(e.target.checked)}
               className="h-5 w-5 rounded accent-[#43A047]"
             />
-            <span>Pickup khaali rakhein (koi bhi pickup chalega, sirf R wale reject honge)</span>
+            <span>Pickup khaali rakhein (location band — distance ya sab chalega)</span>
           </label>
+
+          {/* Pickup Max Distance (KM) */}
+          <div className="rounded-lg border border-white/10 bg-[#171717] p-3">
+            <p className="mb-2 text-xs font-semibold text-[#81C784]">
+              Pickup Max Distance (KM) — agar location nahi pata ho to kitne km tak uthana hai:
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={maxPickupKmText}
+                onChange={(e) => setMaxPickupKmText(e.target.value)}
+                placeholder="Jaise: 0.5, 0.6 ya 2 (khaali = off)"
+                className="font-mono-tabular h-10 min-w-[160px] flex-1 rounded-lg border border-white/10 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setMaxPickupKmText('')}
+                className={`h-10 rounded-lg border px-3 text-xs font-bold transition-colors ${
+                  activeMaxKm <= 0
+                    ? 'border-[#EF5350] bg-[#C62828] text-white'
+                    : 'border-white/15 bg-[#2A2A2A] text-[#B0BEC5] hover:text-white'
+                }`}
+              >
+                OFF
+              </button>
+              {[0.5, 0.6, 1, 2, 3, 5].map((km) => (
+                <button
+                  key={km}
+                  type="button"
+                  onClick={() => setMaxPickupKmText(String(km))}
+                  className={`h-10 rounded-lg border px-3 text-xs font-bold transition-colors ${
+                    activeMaxKm === km
+                      ? 'border-[#81C784] bg-[#43A047] text-white'
+                      : 'border-white/15 bg-[#2A2A2A] text-[#B0BEC5] hover:text-white'
+                  }`}
+                >
+                  {km}km
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-[#9E9E9E]">
+              Drop par chuni hui location (A) hona zaroori hai; Pickup me A-location YA {activeMaxKm > 0 ? `${activeMaxKm} km ke andar` : 'set km ke andar'} aaye to order uth jayega.
+            </p>
+          </div>
 
           <div>
             <p className="mb-1.5 text-xs leading-relaxed text-[#FFB74D]">

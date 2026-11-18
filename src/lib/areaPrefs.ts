@@ -14,10 +14,14 @@ const KEY_REJECT_PICKUP_JSON = 'clicker_area_prefs_reject_pickup_json';
 const KEY_REJECT_DROP_JSON = 'clicker_area_prefs_reject_drop_json';
 const KEY_PAUSED = 'clicker_area_prefs_paused';
 const KEY_PICKUP_KEYWORDS = 'clicker_area_prefs_pickup_keywords';
+const KEY_MAX_PICKUP_KM = 'clicker_area_prefs_max_pickup_km';
 
 const WHITESPACE_RE = /\s+/g;
 const ACCEPT_IN_RE = /accept\s*in/i;
-const KM_HEADER_RE = /\(\s*\d+(?:\.\d+)?\s*km\s*\)/;
+const KM_HEADER_RE = /\(\s*\d+(?:\.\d+)?\s*(?:km|m)\s*\)/;
+const PAREN_DIST_RE = /\(\s*(\d+(?:\.\d+)?)\s*(km|m)\s*\)/i;
+const DIST_KM_RE = /(\d+(?:\.\d+)?)\s*km\b/i;
+const DIST_M_RE = /(\d+(?:\.\d+)?)\s*m\b/i;
 const GREATER_NOIDA_RE = /greater[\s-]*noida|gr\.?\s*noida/g;
 const SECTOR_SPLIT_RE = /^(.+?)\s+(sector\s+[a-z0-9]+)$/;
 const PIN_RE = /(?<![0-9])(110\d{3})(?![0-9])/g;
@@ -256,6 +260,39 @@ export function setPickupKeywords(words: string[]): void {
   localStorage.setItem(KEY_PICKUP_KEYWORDS, words.join('\n'));
 }
 
+export function getMaxPickupKm(): number {
+  const raw = localStorage.getItem(KEY_MAX_PICKUP_KM);
+  if (!raw) return 0;
+  const num = Number(raw);
+  return Number.isFinite(num) && num > 0 ? num : 0;
+}
+
+export function setMaxPickupKm(km: number): void {
+  const clean = Number.isFinite(km) && km > 0 ? km : 0;
+  localStorage.setItem(KEY_MAX_PICKUP_KM, String(clean));
+}
+
+export function extractDistanceKm(text: string): number | null {
+  const parenMatch = PAREN_DIST_RE.exec(text);
+  if (parenMatch?.[1]) {
+    const val = Number(parenMatch[1]);
+    if (Number.isFinite(val)) {
+      return parenMatch[2]?.toLowerCase() === 'm' ? val / 1000 : val;
+    }
+  }
+  const kmMatch = DIST_KM_RE.exec(text);
+  if (kmMatch?.[1]) {
+    const val = Number(kmMatch[1]);
+    if (Number.isFinite(val)) return val;
+  }
+  const mMatch = DIST_M_RE.exec(text);
+  if (mMatch?.[1]) {
+    const val = Number(mMatch[1]);
+    if (Number.isFinite(val)) return val / 1000;
+  }
+  return null;
+}
+
 export function addCustomLocality(city: string, locality: string): void {
   addCustomLocalities(city, [locality]);
 }
@@ -315,7 +352,9 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
   const rejectPickupSelections = getRejectPickupSelections();
   const rejectDropSelections = getRejectDropSelections();
   const pickupKeywords = getPickupKeywords();
+  const maxPickupKm = getMaxPickupKm();
   const [pickupText, dropText] = splitOrder(rawScreenText);
+  const pickupDistanceKm = extractDistanceKm(pickupText);
   const tripDetails = isTripDetailsScreen(rawScreenText);
   const hasAcceptWord = screenHasAcceptWord(rawScreenText);
 
@@ -328,6 +367,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: 'Trip Details screen — order pehle hi accepted hai',
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: true,
       hasAcceptWord,
       pickupMatchedBy: null,
@@ -346,6 +386,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: `REJECT (R) — Pickup "${rejectPickupHit}" par R set hai`,
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
       pickupMatchedBy: null,
@@ -363,6 +404,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: `REJECT (R) — Drop "${rejectDropHit}" par R set hai`,
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
       pickupMatchedBy: null,
@@ -380,6 +422,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: 'Drop: ABHI SET NAHI HAI (koi bhi order accept nahi hoga)',
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
       pickupMatchedBy: null,
@@ -397,6 +440,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: 'Drop area (A) screen text me match nahi hua',
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
       pickupMatchedBy: null,
@@ -404,11 +448,12 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     };
   }
 
-  // 3. Check Pickup Accept (A) or Keywords
+  // 3. Check Pickup Accept (A), Keywords, or Max Pickup KM
   const hasPickupCities = Object.keys(pickupSelections).length > 0;
   const hasKeywords = pickupKeywords.length > 0;
+  const hasDistanceRule = maxPickupKm > 0;
 
-  if (!hasPickupCities && !hasKeywords) {
+  if (!hasPickupCities && !hasKeywords && !hasDistanceRule) {
     return {
       matched: true,
       rejected: false,
@@ -417,6 +462,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: `ACCEPT (A) — Drop (${dropHit}) · Pickup: koi restriction nahi`,
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
       pickupMatchedBy: 'No restriction',
@@ -435,6 +481,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
         reason: `ACCEPT (A) — Pickup (${pickupHit}) -> Drop (${dropHit})`,
         pickupText,
         dropText,
+        pickupDistanceKm,
         isTripDetails: false,
         hasAcceptWord,
         pickupMatchedBy: pickupHit,
@@ -453,9 +500,27 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
       reason: `ACCEPT (A) — Pickup Keyword ("${keywordHit}") -> Drop (${dropHit})`,
       pickupText,
       dropText,
+      pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
       pickupMatchedBy: `Keyword: ${keywordHit}`,
+      dropMatchedBy: dropHit,
+    };
+  }
+
+  if (hasDistanceRule && pickupDistanceKm !== null && pickupDistanceKm <= maxPickupKm + 0.0001) {
+    return {
+      matched: true,
+      rejected: false,
+      rejectedBy: null,
+      triggerNetDrop: false,
+      reason: `ACCEPT (A) — Pickup Distance (${pickupDistanceKm} km <= ${maxPickupKm} km) -> Drop (${dropHit})`,
+      pickupText,
+      dropText,
+      pickupDistanceKm,
+      isTripDetails: false,
+      hasAcceptWord,
+      pickupMatchedBy: `<= ${maxPickupKm} km (${pickupDistanceKm} km)`,
       dropMatchedBy: dropHit,
     };
   }
@@ -465,9 +530,12 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     rejected: false,
     rejectedBy: null,
     triggerNetDrop: true,
-    reason: `Drop (${dropHit}) mila, par Pickup (A) / khaas naam match nahi hua`,
+    reason: hasDistanceRule
+      ? `Drop (${dropHit}) mila, par Pickup location / ${maxPickupKm} km limit match nahi hui`
+      : `Drop (${dropHit}) mila, par Pickup (A) / khaas naam match nahi hua`,
     pickupText,
     dropText,
+    pickupDistanceKm,
     isTripDetails: false,
     hasAcceptWord,
     pickupMatchedBy: null,
