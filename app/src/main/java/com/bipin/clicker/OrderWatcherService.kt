@@ -88,6 +88,7 @@ class OrderWatcherService : AccessibilityService() {
     private var ocrLastSeenAt = 0L
     private var swipeTry = 0
     private var lastVpnPulseAt = 0L
+    private var lastVpnAttemptAt = 0L
     private var lastRejectedSig: String? = null
 
     override fun onServiceConnected() {
@@ -1054,11 +1055,15 @@ class OrderWatcherService : AccessibilityService() {
         val sig = "${pkg.orEmpty()}:${screenText.hashCode()}"
         if (sig == lastRejectedSig && now - lastVpnPulseAt < durMs + 1200L) return
         if (now - lastVpnPulseAt < cooldown) return
+        // FIX: fail hone par har 2ms me dobara try na ho (400ms ka gap)
+        if (now - lastVpnAttemptAt < 400L) return
+        lastVpnAttemptAt = now
 
-        lastVpnPulseAt = now
-        lastRejectedSig = sig
         val ok = NetPulseVpnService.triggerPulse(applicationContext)
         if (ok) {
+            // FIX: cooldown tabhi lagao jab net-off sach me chala (pehle fail par bhi lag jata tha)
+            lastVpnPulseAt = now
+            lastRejectedSig = sig
             setStatus("ORDER REJECTED")
             handler.postDelayed({
                 if (!AreaPrefs.isPaused(applicationContext)) setStatus("READY")
@@ -1066,7 +1071,8 @@ class OrderWatcherService : AccessibilityService() {
         }
         val tag = if (isExplicitReject) "REJECT (R) match" else "A rules NOT match"
         val secLabel = String.format("%.1fs", durMs / 1000.0)
-        reportDebug("$tag -> $secLabel VPN Net-Off=$ok\n\"${screenText.take(110)}\"")
+        val why = if (ok) "" else "\nKYUN FAIL: ${NetPulseVpnService.lastError}"
+        reportDebug("$tag -> $secLabel VPN Net-Off=$ok$why\n\"${screenText.take(110)}\"")
     }
 
     override fun onInterrupt() = Unit

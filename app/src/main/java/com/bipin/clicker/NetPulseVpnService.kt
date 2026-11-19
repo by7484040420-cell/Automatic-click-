@@ -26,7 +26,12 @@ class NetPulseVpnService : VpnService() {
     private var stopRunnable: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        ensureForeground()
+        // FIX: foreground fail ho (Android 12+/ColorOS background restriction) to bhi VPN chalna chahiye
+        try {
+            ensureForeground()
+        } catch (e: Throwable) {
+            lastError = "foreground fail: ${e.javaClass.simpleName}"
+        }
 
         val durationMs = (intent?.getLongExtra(EXTRA_DURATION_MS, AreaPrefs.getVpnDurationMs(this))
             ?: AreaPrefs.getVpnDurationMs(this)).coerceIn(250L, 5000L)
@@ -35,16 +40,23 @@ class NetPulseVpnService : VpnService() {
         val targetPackages = intent?.getStringArrayListExtra(EXTRA_PACKAGES)
             ?: ArrayList(AreaPrefs.getVpnTargetPackages(this))
 
-        startBlackholeVpn(targetMode, targetPackages)
+        try {
+            startBlackholeVpn(targetMode, targetPackages)
+        } catch (e: Throwable) {
+            lastError = "vpn establish fail: ${e.javaClass.simpleName}"
+        }
 
         stopRunnable?.let { mainHandler.removeCallbacks(it) }
         val r = Runnable {
             stopBlackholeVpn()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            } catch (_: Throwable) {
             }
             stopSelf()
         }
@@ -119,9 +131,17 @@ class NetPulseVpnService : VpnService() {
         }
 
         vpnInterface = try {
-            builder.establish().also { if (it != null) activeSignature = sig }
-        } catch (_: Exception) {
+            val fd = builder.establish()
+            if (fd != null) {
+                activeSignature = sig
+                lastError = ""
+            } else {
+                lastError = "establish()=null (VPN permission revoked / dusra VPN ON)"
+            }
+            fd
+        } catch (e: Exception) {
             activeSignature = ""
+            lastError = "establish error: ${e.javaClass.simpleName}"
             null
         }
     }
@@ -145,6 +165,8 @@ class NetPulseVpnService : VpnService() {
         private const val CHANNEL_ID = "swiftgate_vpn_pulse"
         private const val NOTIF_ID = 4099
         @Volatile private var channelCreated = false
+        /** Pichli baar net-off kyun fail hua - debug box me dikhta hai */
+        @Volatile var lastError: String = ""
         const val EXTRA_DURATION_MS = "duration_ms"
         const val EXTRA_TARGET_MODE = "target_mode"
         const val EXTRA_PACKAGES = "target_packages"
@@ -153,13 +175,20 @@ class NetPulseVpnService : VpnService() {
             VpnService.prepare(context) != null
 
         fun triggerPulse(context: Context): Boolean {
-            if (!AreaPrefs.isVpnPulseEnabled(context)) return false
-            if (VpnService.prepare(context) != null) return false
+            if (!AreaPrefs.isVpnPulseEnabled(context)) {
+                lastError = "VPN toggle OFF hai"
+                return false
+            }
+            if (VpnService.prepare(context) != null) {
+                lastError = "VPN permission nahi mili - app me 'VPN Allow' dabao"
+                return false
+            }
 
             val durationMs = AreaPrefs.getVpnDurationMs(context)
             val targetMode = AreaPrefs.getVpnTargetMode(context)
             val packages = ArrayList(AreaPrefs.getVpnTargetPackages(context))
             if (targetMode == AreaPrefs.VPN_MODE_SELECTED_APPS && packages.isEmpty()) {
+                lastError = "Selected Apps mode me koi APK select nahi hai"
                 return false
             }
 
@@ -168,14 +197,27 @@ class NetPulseVpnService : VpnService() {
                 putExtra(EXTRA_TARGET_MODE, targetMode)
                 putStringArrayListExtra(EXTRA_PACKAGES, packages)
             }
+
+            // FIX: pehle seedha startService (background se bhi chalta hai kyunki app ka
+            // Floating Bubble foreground service pehle se chal raha hota hai).
+            // Fail ho to startForegroundService try karo.
+            try {
+                context.startService(i)
+                lastError = ""
+                return true
+            } catch (e: Exception) {
+                lastError = "startService fail: ${e.javaClass.simpleName}"
+            }
             return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(i)
                 } else {
                     context.startService(i)
                 }
+                lastError = ""
                 true
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                lastError = "service start fail: ${e.javaClass.simpleName} (Battery: Unrestricted + Autostart ON karo)"
                 false
             }
         }
