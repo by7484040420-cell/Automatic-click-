@@ -17,8 +17,6 @@ import org.json.JSONObject
 object AreaPrefs {
 
     const val ALL_MARKER = "__ALL__"
-    const val VPN_MODE_ALL_PHONE = "ALL_PHONE"
-    const val VPN_MODE_SELECTED_APPS = "SELECTED_APPS"
 
     private const val PREFS_NAME = "clicker_area_prefs"
     private const val KEY_PICKUP_JSON = "pickup_selections_json"
@@ -29,23 +27,15 @@ object AreaPrefs {
     private const val KEY_PAUSED = "is_paused"
     private const val KEY_PICKUP_KEYWORDS = "pickup_keywords"
     private const val KEY_MAX_PICKUP_KM = "max_pickup_km"
-    private const val KEY_VPN_ENABLED = "vpn_pulse_enabled"
-    private const val KEY_VPN_DURATION_MS = "vpn_pulse_duration_ms"
-    private const val KEY_VPN_TARGET_MODE = "vpn_pulse_target_mode"
-    private const val KEY_VPN_PACKAGES_JSON = "vpn_pulse_packages_json"
 
-    // v13 SPEED: selections + VPN settings memory me cache hain (0ms lookup)
+    // v13 SPEED: selections + pause state memory me cache hain (0ms lookup)
+    @Volatile private var isPausedCache: Boolean? = null
     @Volatile private var pickupCache: Map<String, Set<String>>? = null
     @Volatile private var dropCache: Map<String, Set<String>>? = null
     @Volatile private var rejectPickupCache: Map<String, Set<String>>? = null
     @Volatile private var rejectDropCache: Map<String, Set<String>>? = null
     @Volatile private var pickupKeywordsCache: List<String>? = null
     @Volatile private var maxPickupKmCache: Float? = null
-    @Volatile private var vpnEnabledCache: Boolean? = null
-    @Volatile private var vpnDurationMsCache: Long? = null
-    @Volatile private var vpnTargetModeCache: String? = null
-    @Volatile private var vpnPackagesCache: Set<String>? = null
-    private val WHITESPACE = Regex("\\s+")
 
     private fun copySelections(src: Map<String, Set<String>>): Map<String, Set<String>> {
         val out = LinkedHashMap<String, Set<String>>()
@@ -56,69 +46,12 @@ object AreaPrefs {
     // ---------- Pause / resume (floating bubble) ----------
 
     fun setPaused(context: Context, paused: Boolean) {
+        isPausedCache = paused
         prefs(context).edit().putBoolean(KEY_PAUSED, paused).apply()
     }
 
     fun isPaused(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_PAUSED, false)
-
-    // ---------- VPN 0.5s-1s Net-Off Settings ----------
-
-    fun isVpnPulseEnabled(context: Context): Boolean =
-        vpnEnabledCache ?: prefs(context).getBoolean(KEY_VPN_ENABLED, true).also { vpnEnabledCache = it }
-
-    fun setVpnPulseEnabled(context: Context, enabled: Boolean) {
-        vpnEnabledCache = enabled
-        prefs(context).edit().putBoolean(KEY_VPN_ENABLED, enabled).apply()
-    }
-
-    fun getVpnDurationMs(context: Context): Long =
-        vpnDurationMsCache ?: prefs(context).getLong(KEY_VPN_DURATION_MS, 500L)
-            .coerceIn(250L, 5000L)
-            .also { vpnDurationMsCache = it }
-
-    fun setVpnDurationMs(context: Context, ms: Long) {
-        val clean = ms.coerceIn(250L, 5000L)
-        vpnDurationMsCache = clean
-        prefs(context).edit().putLong(KEY_VPN_DURATION_MS, clean).apply()
-    }
-
-    fun getVpnTargetMode(context: Context): String =
-        vpnTargetModeCache ?: (prefs(context).getString(KEY_VPN_TARGET_MODE, VPN_MODE_ALL_PHONE)
-            ?: VPN_MODE_ALL_PHONE).also { vpnTargetModeCache = it }
-
-    fun setVpnTargetMode(context: Context, mode: String) {
-        val clean = if (mode == VPN_MODE_SELECTED_APPS) VPN_MODE_SELECTED_APPS else VPN_MODE_ALL_PHONE
-        vpnTargetModeCache = clean
-        prefs(context).edit().putString(KEY_VPN_TARGET_MODE, clean).apply()
-    }
-
-    fun getVpnTargetPackages(context: Context): Set<String> {
-        vpnPackagesCache?.let { return it }
-        val raw = prefs(context).getString(KEY_VPN_PACKAGES_JSON, null)
-        if (raw == null) {
-            vpnPackagesCache = emptySet()
-            return emptySet()
-        }
-        val out = LinkedHashSet<String>()
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val p = arr.getString(i).trim()
-                if (p.isNotEmpty()) out.add(p)
-            }
-        } catch (_: Exception) { }
-        vpnPackagesCache = out
-        return out
-    }
-
-    fun setVpnTargetPackages(context: Context, pkgs: Set<String>) {
-        val cleaned = pkgs.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        vpnPackagesCache = cleaned.toCollection(LinkedHashSet())
-        val arr = JSONArray()
-        cleaned.forEach { arr.put(it) }
-        prefs(context).edit().putString(KEY_VPN_PACKAGES_JSON, arr.toString()).apply()
-    }
+        isPausedCache ?: prefs(context).getBoolean(KEY_PAUSED, false).also { isPausedCache = it }
 
     // ---------- Pickup / Drop selections (A = Accept, R = Reject) ----------
 
@@ -273,11 +206,56 @@ object AreaPrefs {
         return null
     }
 
+    fun prewarm(context: Context) {
+        val app = context.applicationContext
+        isPaused(app)
+        val p = getPickupSelections(app)
+        val d = getDropSelections(app)
+        val rp = getRejectPickupSelections(app)
+        val rd = getRejectDropSelections(app)
+        val kw = getPickupKeywords(app)
+        getMaxPickupKm(app)
+
+        fun warmMap(m: Map<String, Set<String>>) {
+            for ((city, locs) in m) {
+                val cityNorm = normalize(city)
+                if (cityNorm.isEmpty()) continue
+                val zone = isZone(cityNorm)
+                cityAliases(if (zone) "delhi" else cityNorm).forEach { wordRegex(it) }
+                if (zone && locs.contains(ALL_MARKER)) {
+                    zoneNames(app, cityNorm).forEach { wordRegex(normalize(it)) }
+                    zonePins(app, cityNorm)
+                }
+                for (loc in locs) {
+                    if (loc != ALL_MARKER) {
+                        val ln = normalize(loc)
+                        if (ln.isNotEmpty()) wordRegex(ln)
+                    }
+                }
+            }
+        }
+        warmMap(p)
+        warmMap(d)
+        warmMap(rp)
+        warmMap(rd)
+        kw.forEach { wordRegex(normalize(it)) }
+    }
+
     fun matchesRejectText(context: Context, rawScreenText: String): Boolean {
         val rejectPickup = getRejectPickupSelections(context)
         val rejectDrop = getRejectDropSelections(context)
         if (rejectPickup.isEmpty() && rejectDrop.isEmpty()) return false
         val (pickupText, dropText) = splitOrder(rawScreenText)
+        return matchesRejectSplit(context, rejectPickup, rejectDrop, pickupText, dropText)
+    }
+
+    private fun matchesRejectSplit(
+        context: Context,
+        rejectPickup: Map<String, Set<String>>,
+        rejectDrop: Map<String, Set<String>>,
+        pickupText: String,
+        dropText: String
+    ): Boolean {
         if (rejectPickup.isNotEmpty() && selectionsMatchText(context, rejectPickup, pickupText)) return true
         if (rejectDrop.isNotEmpty() && selectionsMatchText(context, rejectDrop, dropText)) return true
         return false
@@ -285,18 +263,26 @@ object AreaPrefs {
 
     fun matchesScreenText(context: Context, rawScreenText: String): Boolean {
         val dropSelections = getDropSelections(context)
+        // Drop (A) set kiye bina kabhi match nahi hoga — instant exit
+        if (dropSelections.isEmpty()) return false
+
+        val rejectPickup = getRejectPickupSelections(context)
+        val rejectDrop = getRejectDropSelections(context)
         val pickupSelections = getPickupSelections(context)
         val pickupKeywords = getPickupKeywords(context)
         val maxPickupKm = getMaxPickupKm(context)
 
-        // 1. Pehle Reject (R) check: agar Pickup ya Drop par R match ho to order accept NAHI hoga
-        if (matchesRejectText(context, rawScreenText)) return false
-
-        // 2. Accept (A) Drop check: Drop A set kiye bina kabhi match nahi hoga
-        if (dropSelections.isEmpty()) return false
-
+        // splitOrder ek hi baar chalao (pehle 2 baar chalta tha)
         val (pickupText, dropText) = splitOrder(rawScreenText)
 
+        // 1. Pehle Reject (R) check: agar Pickup ya Drop par R match ho to order accept NAHI hoga
+        if ((rejectPickup.isNotEmpty() || rejectDrop.isNotEmpty()) &&
+            matchesRejectSplit(context, rejectPickup, rejectDrop, pickupText, dropText)
+        ) {
+            return false
+        }
+
+        // 2. Accept (A) Drop check
         if (!selectionsMatchText(context, dropSelections, dropText)) return false
 
         // 3. Accept (A) Pickup check: Location (A) YA Khas Naam YA Max Pickup KM (jo bhi set ho)
@@ -460,8 +446,28 @@ object AreaPrefs {
     private fun cityAliases(normalizedCity: String): List<String> =
         CITY_ALIASES[normalizedCity] ?: listOf(normalizedCity)
 
-    private fun normalize(s: String): String =
-        s.trim().lowercase().replace(WHITESPACE, " ")
+    private fun normalize(s: String): String {
+        val len = s.length
+        if (len == 0) return ""
+        val sb = StringBuilder(len)
+        var inSpace = true
+        for (i in 0 until len) {
+            val ch = s[i]
+            if (ch.isWhitespace()) {
+                if (!inSpace) {
+                    sb.append(' ')
+                    inSpace = true
+                }
+            } else {
+                sb.append(ch.lowercaseChar())
+                inSpace = false
+            }
+        }
+        if (sb.isNotEmpty() && sb[sb.length - 1] == ' ') {
+            sb.setLength(sb.length - 1)
+        }
+        return sb.toString()
+    }
 
     // ---------- internal JSON helpers ----------
 

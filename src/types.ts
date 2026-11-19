@@ -61,7 +61,6 @@ export interface MatchAnalysis {
   matched: boolean;
   rejected: boolean;
   rejectedBy: string | null;
-  triggerNetDrop: boolean;
   reason: string;
   pickupText: string;
   dropText: string;
@@ -71,19 +70,6 @@ export interface MatchAnalysis {
   pickupMatchedBy: string | null;
   dropMatchedBy: string | null;
 }
-
-export type VpnTargetMode = 'ALL_PHONE' | 'SELECTED_APPS';
-
-export interface VpnPulseConfig {
-  enabled: boolean;
-  durationMs: number;
-  targetMode: VpnTargetMode;
-  targetPackages: string[];
-  webhookOffUrl: string;
-  webhookOnUrl: string;
-}
-
-export type VpnPulsePhase = 'CONNECTED' | 'NET_OFF_VPN' | 'RECONNECTING';
 
 export type LiveWatcherStatus =
   | 'OFF'

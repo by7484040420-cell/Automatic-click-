@@ -15,21 +15,12 @@ import {
   savePermissions,
 } from './lib/permissionManager';
 import { checkForUpdate } from './lib/updateManager';
-import {
-  fireNativeOrWebhookOff,
-  fireNativeOrWebhookOn,
-  formatVpnTargetLabel,
-  getVpnPulseConfig,
-  saveVpnPulseConfig,
-} from './lib/vpnNetPulse';
 import type {
   LicenseState,
   LiveWatcherStatus,
   PermissionState,
   ScreenId,
   UpdateInfo,
-  VpnPulseConfig,
-  VpnPulsePhase,
 } from './types';
 
 export function App() {
@@ -51,18 +42,8 @@ export function App() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const [vpnConfig, setVpnConfig] = useState<VpnPulseConfig>(() => getVpnPulseConfig());
-  const [vpnPhase, setVpnPhase] = useState<VpnPulsePhase>('CONNECTED');
-  const [vpnCountdownMs, setVpnCountdownMs] = useState<number>(0);
-
   const toastTimer = useRef<number | null>(null);
-  const vpnTimers = useRef<number[]>([]);
   const displayStreamRef = useRef<MediaStream | null>(null);
-
-  const clearVpnTimers = useCallback(() => {
-    vpnTimers.current.forEach((id) => window.clearTimeout(id));
-    vpnTimers.current = [];
-  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -80,12 +61,11 @@ export function App() {
       if (res.info) setUpdateInfo(res.info);
     });
     return () => {
-      clearVpnTimers();
       if (displayStreamRef.current) {
         displayStreamRef.current.getTracks().forEach((t) => t.stop());
       }
     };
-  }, [clearVpnTimers]);
+  }, []);
 
   const isRunning = permissions.accessibility && !isPaused && license.isActive;
 
@@ -96,49 +76,6 @@ export function App() {
     }
     setScreenWatcherRunning(false);
   }, []);
-
-  const handleUpdateVpnConfig = (next: VpnPulseConfig) => {
-    saveVpnPulseConfig(next);
-    setVpnConfig(next);
-  };
-
-  const handleTriggerVpnPulse = useCallback(
-    (reason: string) => {
-      clearVpnTimers();
-      const dur = vpnConfig.durationMs;
-      const offLog = fireNativeOrWebhookOff(vpnConfig);
-      const targetLabel = formatVpnTargetLabel(vpnConfig);
-      setVpnPhase('NET_OFF_VPN');
-      setVpnCountdownMs(dur);
-      setDebugMessage(`VPN NET OFF (${targetLabel}, ${(dur / 1000).toFixed(1)}s): ${reason} | ${offLog}`);
-      showToast(`Net OFF [${targetLabel}] (${(dur / 1000).toFixed(1)}s) — ${reason}`);
-
-      // Tick countdown every 100ms
-      const startedAt = Date.now();
-      const tickInterval = window.setInterval(() => {
-        const rem = Math.max(0, dur - (Date.now() - startedAt));
-        setVpnCountdownMs(rem);
-      }, 100);
-      vpnTimers.current.push(tickInterval);
-
-      const restoreTimer = window.setTimeout(() => {
-        window.clearInterval(tickInterval);
-        setVpnCountdownMs(0);
-        setVpnPhase('RECONNECTING');
-        const onLog = fireNativeOrWebhookOn(vpnConfig);
-        setDebugMessage(`VPN NET RESTORING: ${onLog}`);
-
-        const doneTimer = window.setTimeout(() => {
-          setVpnPhase('CONNECTED');
-          setDebugMessage(`VPN NET ON (Restored after ${(dur / 1000).toFixed(1)}s)`);
-        }, 200);
-        vpnTimers.current.push(doneTimer);
-      }, dur);
-
-      vpnTimers.current.push(restoreTimer);
-    },
-    [clearVpnTimers, showToast, vpnConfig]
-  );
 
   const handleToggleStartStop = () => {
     if (!license.isActive) {
@@ -241,20 +178,6 @@ export function App() {
         onToggleRun={handleToggleStartStop}
       />
 
-      {/* Live 1-Second VPN Net-Off Top Banner */}
-      {vpnPhase !== 'CONNECTED' && (
-        <div
-          role="status"
-          className={`px-4 py-2 text-center text-xs font-bold tracking-wide text-white ${
-            vpnPhase === 'NET_OFF_VPN' ? 'bg-[#C62828]' : 'bg-[#EF6C00]'
-          }`}
-        >
-          {vpnPhase === 'NET_OFF_VPN'
-            ? `VPN NET OFF [${formatVpnTargetLabel(vpnConfig)}] — ${(vpnCountdownMs / 1000).toFixed(1)}s me auto ON hoga`
-            : 'VPN NET RESTORING...'}
-        </div>
-      )}
-
       {/* Forced Update Banner */}
       {updateInfo?.forced && effectiveScreen !== 'license' && (
         <div className="border-b border-[#C62828]/40 bg-[#C62828]/20 px-4 py-2.5 text-center text-xs font-semibold text-white">
@@ -281,11 +204,6 @@ export function App() {
             rootStateText={rootStateText}
             screenWatcherRunning={screenWatcherRunning}
             debugOverlayEnabled={debugOverlayEnabled}
-            vpnConfig={vpnConfig}
-            vpnPhase={vpnPhase}
-            vpnCountdownMs={vpnCountdownMs}
-            onUpdateVpnConfig={handleUpdateVpnConfig}
-            onTriggerVpnPulse={handleTriggerVpnPulse}
             onToggleStartStop={handleToggleStartStop}
             onNavigate={handleNavigate}
             onToggleBubble={handleToggleBubble}

@@ -222,7 +222,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         val rawQuery = binding.locationSearch.text?.toString()?.trim().orEmpty()
 
         binding.cityContainer.addView(TextView(this).apply {
-            text = "Har location ke aage [A] = Accept, [R] = Reject (1s Net-Off)"
+            text = "Har location ke aage [A] = Accept, [R] = Reject"
             setTextColor(Color.parseColor("#B0BEC5"))
             textSize = 12f
             setPadding(0, 4, 0, 10)

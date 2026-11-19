@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
@@ -20,6 +21,7 @@ import android.view.WindowManager
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import kotlin.math.abs
 
 /** Floating live status button for the auto-accept service. */
@@ -33,7 +35,7 @@ class FloatingBubbleService : Service() {
     private val statusUpdater = object : Runnable {
         override fun run() {
             refreshStatus()
-            handler.postDelayed(this, 100L)
+            handler.postDelayed(this, 400L)
         }
     }
 
@@ -178,7 +180,7 @@ class FloatingBubbleService : Service() {
                 }
 
                 "ORDER REJECTED" -> {
-                    text = "NET OFF\n1s VPN"
+                    text = "ORDER\nREJECTED"
                     setBackgroundColor(Color.parseColor("#C62828"))
                 }
 
@@ -241,7 +243,16 @@ class FloatingBubbleService : Service() {
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
 
-        startForeground(777, notification)
+        if (Build.VERSION.SDK_INT >= 34) {
+            ServiceCompat.startForeground(
+                this,
+                777,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(777, notification)
+        }
     }
 
     private fun setRunningFlag(running: Boolean) {

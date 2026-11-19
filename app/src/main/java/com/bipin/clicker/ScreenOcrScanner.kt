@@ -33,6 +33,10 @@ object ScreenOcrScanner {
     }
     private val executor = Executors.newSingleThreadExecutor()
 
+    fun warmUp() {
+        recognizer
+    }
+
     /** Pehle se bane bitmap (live screen frame) par OCR. */
     fun recognize(bmp: Bitmap, onResult: (Result?, String?) -> Unit) {
         recognizer.process(InputImage.fromBitmap(bmp, 0))
@@ -62,12 +66,17 @@ object ScreenOcrScanner {
                 object : AccessibilityService.TakeScreenshotCallback {
                     override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
                         val buffer = screenshot.hardwareBuffer
-                        val bmp: Bitmap? = try {
+                        val hwBmp = try {
                             Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
-                                ?.copy(Bitmap.Config.ARGB_8888, false)
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val bmp: Bitmap? = try {
+                            hwBmp?.copy(Bitmap.Config.ARGB_8888, false)
+                        } catch (_: Exception) {
                             null
                         } finally {
+                            try { hwBmp?.recycle() } catch (_: Exception) {}
                             try { buffer.close() } catch (_: Exception) {}
                         }
                         if (bmp == null) {
@@ -86,6 +95,7 @@ object ScreenOcrScanner {
                                 onResult(Result(bmp, lines), null)
                             }
                             .addOnFailureListener { e ->
+                                try { bmp.recycle() } catch (_: Exception) {}
                                 onResult(null, "OCR fail: ${e.message}")
                             }
                     }

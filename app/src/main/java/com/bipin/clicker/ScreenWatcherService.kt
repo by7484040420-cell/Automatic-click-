@@ -133,10 +133,10 @@ class ScreenWatcherService : Service() {
         val img = try { rd.acquireLatestImage() } catch (_: Exception) { null } ?: return
         try {
             val now = SystemClock.uptimeMillis()
-            if (now - lastCheck < 25L) return
+            if (now - lastCheck < 16L) return
             lastCheck = now
             if (AreaPrefs.isPaused(this)) return
-            if (now - lastTrigger < 200L) return
+            if (now - lastTrigger < 120L) return
 
             val plane = img.planes[0]
             val buf = plane.buffer
@@ -175,8 +175,8 @@ class ScreenWatcherService : Service() {
 
     /** Neeche ke 70% me chauda rangeen pill (>=6 rows lagatar) dikhe to true. Sasta check - OCR baad me. */
     private fun looksLikeSlider(buf: ByteBuffer, rowStride: Int, pxStride: Int, w: Int, h: Int): Boolean {
-        val stepX = 6
-        val stepY = 6
+        val stepX = 8
+        val stepY = 8
         var consecutive = 0
         var y = (h * 0.30f).toInt()
         val yEnd = (h * 0.97f).toInt()
@@ -204,7 +204,7 @@ class ScreenWatcherService : Service() {
             val rowOk = total > 0 && colored * 2 >= total && (last - first) >= (w * 0.7f)
             if (rowOk) {
                 consecutive++
-                if (consecutive >= 6) return true
+                if (consecutive >= 4) return true
             } else {
                 consecutive = 0
             }

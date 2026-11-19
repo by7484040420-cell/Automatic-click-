@@ -4,23 +4,19 @@ package com.bipin.clicker
 
 import android.Manifest
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
-import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -34,17 +30,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var adBanner: AdView? = null
-
-    private val vpnPermLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { r ->
-        if (r.resultCode == RESULT_OK) {
-            Toast.makeText(this, "VPN Permission Allow ho gayi!", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "VPN permission cancel hui", Toast.LENGTH_SHORT).show()
-        }
-        refreshStatus()
-    }
+    private var adsInitialized = false
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -71,33 +57,12 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        MobileAds.initialize(this) {}
-        val banner = AdView(this)
-        banner.setAdSize(AdSize.BANNER)
-        banner.adUnitId = AdIds.BANNER
-        binding.adBannerBox.addView(
-            banner,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER_HORIZONTAL
-            )
-        )
-        banner.loadAd(AdRequest.Builder().build())
-        adBanner = banner
-        NativeVideoAd.load(this, binding.adVideoBox)
-
         requestNotificationPermissionIfNeeded()
-
-        // AUTO SETUP: app khulte hi adhuri settings ki screen ek-ek karke khulegi
-        SetupWizard.start(this, forceAll = false)
 
         binding.btnStartStop.setOnClickListener { toggleStartStop() }
 
         binding.btnPermissions.setOnClickListener {
-            // Auto Setup dobara chalao (jo adhura hai wo khulega, autostart bhi)
-            SetupWizard.start(this, forceAll = true)
-            SetupWizard.runNext(this)
+            startActivity(Intent(this, PermissionSetupActivity::class.java))
         }
 
         binding.btnSetArea.setOnClickListener {
@@ -116,60 +81,10 @@ class MainActivity : AppCompatActivity() {
                 projectionLauncher.launch(mpm.createScreenCaptureIntent())
             }
         }
-        // Root ho to app khulte hi saari permissions khud mil jati hain
-        runRootSetup(false)
         binding.btnSwipeZone.setOnClickListener { openSwipeZoneEditor() }
 
-        // VPN 1s Net-Off controls
-        binding.btnVpnToggle.setOnClickListener {
-            val next = !AreaPrefs.isVpnPulseEnabled(this)
-            AreaPrefs.setVpnPulseEnabled(this, next)
-            refreshStatus()
-            if (next && NetPulseVpnService.needsPermission(this)) {
-                requestVpnPermission()
-            }
-        }
-        binding.btnVpnAllowPerm.setOnClickListener { requestVpnPermission() }
-        binding.btnVpnModeAll.setOnClickListener {
-            AreaPrefs.setVpnTargetMode(this, AreaPrefs.VPN_MODE_ALL_PHONE)
-            refreshStatus()
-        }
-        binding.btnVpnModeApps.setOnClickListener {
-            AreaPrefs.setVpnTargetMode(this, AreaPrefs.VPN_MODE_SELECTED_APPS)
-            refreshStatus()
-            if (AreaPrefs.getVpnTargetPackages(this).isEmpty()) {
-                openAppPickerDialog()
-            }
-        }
-        binding.btnPickApps.setOnClickListener { openAppPickerDialog() }
-        binding.btnVpnDuration.setOnClickListener {
-            val steps = listOf(500L, 800L, 1000L, 1500L, 2000L)
-            val cur = AreaPrefs.getVpnDurationMs(this)
-            val idx = steps.indexOfFirst { it == cur }
-            val nextMs = steps[(idx + 1) % steps.size]
-            AreaPrefs.setVpnDurationMs(this, nextMs)
-            refreshStatus()
-        }
-        binding.btnVpnTest.setOnClickListener {
-            if (NetPulseVpnService.needsPermission(this)) {
-                requestVpnPermission()
-                return@setOnClickListener
-            }
-            if (AreaPrefs.getVpnTargetMode(this) == AreaPrefs.VPN_MODE_SELECTED_APPS &&
-                AreaPrefs.getVpnTargetPackages(this).isEmpty()
-            ) {
-                Toast.makeText(this, "Pehle kam se kam 1 APK select karein", Toast.LENGTH_SHORT).show()
-                openAppPickerDialog()
-                return@setOnClickListener
-            }
-            val ok = NetPulseVpnService.triggerPulse(this)
-            val sec = String.format("%.1fs", AreaPrefs.getVpnDurationMs(this) / 1000.0)
-            Toast.makeText(
-                this,
-                if (ok) "1s VPN Net-Off chal gaya ($sec me auto ON hoga)" else "VPN ON nahi ho paya (toggle ON check karein)",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
+        // First frame turant render hone ke baad Ads load karo (app open lag na ho)
+        binding.root.postDelayed({ initAdsIfNeeded() }, 600L)
 
         // Advanced cheezein chhupi rahengi, dabane par hi dikhengi
         binding.tvAdvanced.setOnClickListener {
@@ -189,85 +104,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun requestVpnPermission() {
-        val intent = VpnService.prepare(this)
-        if (intent != null) {
-            vpnPermLauncher.launch(intent)
-        } else {
-            Toast.makeText(this, "VPN permission pehle se allow hai", Toast.LENGTH_SHORT).show()
-            refreshStatus()
-        }
-    }
-
-    private fun openAppPickerDialog() {
-        Toast.makeText(this, "Apps list load ho rahi hai...", Toast.LENGTH_SHORT).show()
-        val pm = packageManager
-        val selected = AreaPrefs.getVpnTargetPackages(this).toMutableSet()
-        Thread {
-            val apps = runCatching {
-                pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                    .filter { info ->
-                        info.packageName != packageName &&
-                            ((info.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
-                                pm.getLaunchIntentForPackage(info.packageName) != null ||
-                                info.packageName in selected)
-                    }
-                    .map { info ->
-                        val label = runCatching { pm.getApplicationLabel(info).toString() }
-                            .getOrDefault(info.packageName)
-                        label to info.packageName
-                    }
-                    .distinctBy { it.second }
-                    .sortedBy { it.first.lowercase() }
-            }.getOrDefault(emptyList())
-
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                if (apps.isEmpty()) {
-                    showCustomPackageDialog(selected)
-                    return@runOnUiThread
-                }
-
-                val labels = apps.map { "${it.first}\n(${it.second})" }.toTypedArray()
-                val checked = BooleanArray(apps.size) { i -> apps[i].second in selected }
-
-                AlertDialog.Builder(this)
-                    .setTitle("Chune Hue APKs (1s Net Off)")
-                    .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                        val pkg = apps[which].second
-                        if (isChecked) selected.add(pkg) else selected.remove(pkg)
-                    }
-                    .setPositiveButton("Save") { _, _ ->
-                        AreaPrefs.setVpnTargetPackages(this, selected)
-                        refreshStatus()
-                    }
-                    .setNeutralButton("Custom Package") { _, _ ->
-                        AreaPrefs.setVpnTargetPackages(this, selected)
-                        showCustomPackageDialog(selected)
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        }.start()
-    }
-
-    private fun showCustomPackageDialog(selected: MutableSet<String>) {
-        val input = EditText(this).apply {
-            hint = "Package naam daalein (e.g. com.theporter.android.driverapp)"
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Custom APK Package Add Karein")
-            .setView(input)
-            .setPositiveButton("Add") { _, _ ->
-                val pkg = input.text.toString().trim()
-                if (pkg.isNotEmpty()) {
-                    selected.add(pkg)
-                    AreaPrefs.setVpnTargetPackages(this, selected)
-                    refreshStatus()
+    private fun initAdsIfNeeded() {
+        if (adsInitialized || isFinishing || isDestroyed) return
+        adsInitialized = true
+        try {
+            MobileAds.initialize(applicationContext) {
+                if (isFinishing || isDestroyed) return@initialize
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    val banner = AdView(this)
+                    banner.setAdSize(AdSize.BANNER)
+                    banner.adUnitId = AdIds.BANNER
+                    binding.adBannerBox.addView(
+                        banner,
+                        FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.CENTER_HORIZONTAL
+                        )
+                    )
+                    banner.loadAd(AdRequest.Builder().build())
+                    adBanner = banner
+                    NativeVideoAd.load(this, binding.adVideoBox)
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        } catch (_: Exception) {
+        }
     }
 
     override fun onDestroy() {
@@ -287,10 +149,6 @@ class MainActivity : AppCompatActivity() {
         LicenseManager.refreshAsync(this)
         UpdateManager.checkAndPrompt(this)
         refreshStatus()
-        // Settings se wapas aate hi agli adhuri setting khol do
-        binding.root.postDelayed({
-            if (!isFinishing && !isDestroyed) SetupWizard.runNext(this)
-        }, 1200L)
     }
 
     private fun runRootSetup(manual: Boolean) {
@@ -352,10 +210,14 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        if (PermissionManager.isFloatingBubbleRunning(this)) {
-            stopService(Intent(this, FloatingBubbleService::class.java))
-        } else {
-            startService(Intent(this, FloatingBubbleService::class.java))
+        try {
+            if (PermissionManager.isFloatingBubbleRunning(this)) {
+                stopService(Intent(this, FloatingBubbleService::class.java))
+            } else {
+                ContextCompat.startForegroundService(this, Intent(this, FloatingBubbleService::class.java))
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Bubble start nahi ho paya: ${e.message}", Toast.LENGTH_SHORT).show()
         }
         binding.root.postDelayed({ refreshStatus() }, 300)
     }
@@ -416,32 +278,6 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnStartStop.backgroundTintList =
             ColorStateList.valueOf(Color.parseColor(if (running) "#43A047" else "#C62828"))
-
-        // VPN Panel Status
-        val vpnEnabled = AreaPrefs.isVpnPulseEnabled(this)
-        val vpnNeedsPerm = NetPulseVpnService.needsPermission(this)
-        val vpnMode = AreaPrefs.getVpnTargetMode(this)
-        val vpnApps = AreaPrefs.getVpnTargetPackages(this)
-        val vpnDurMs = AreaPrefs.getVpnDurationMs(this)
-
-        binding.btnVpnToggle.text = if (vpnEnabled) "VPN: ON" else "VPN: OFF"
-        binding.btnVpnToggle.backgroundTintList =
-            ColorStateList.valueOf(Color.parseColor(if (vpnEnabled) "#43A047" else "#616161"))
-        binding.btnVpnAllowPerm.visibility = if (vpnEnabled && vpnNeedsPerm) View.VISIBLE else View.GONE
-
-        val isAllMode = vpnMode != AreaPrefs.VPN_MODE_SELECTED_APPS
-        binding.btnVpnModeAll.backgroundTintList =
-            ColorStateList.valueOf(Color.parseColor(if (isAllMode) "#C62828" else "#2A2A2A"))
-        binding.btnVpnModeApps.backgroundTintList =
-            ColorStateList.valueOf(Color.parseColor(if (!isAllMode) "#43A047" else "#2A2A2A"))
-        binding.btnVpnModeApps.text = "Chune Hue APKs (${vpnApps.size})"
-        binding.vpnAppsBar.visibility = if (!isAllMode) View.VISIBLE else View.GONE
-        binding.tvVpnSelectedApps.text = if (vpnApps.isEmpty()) {
-            "Selected APKs: koi nahi (niche button se chunein)"
-        } else {
-            "Selected APKs: ${vpnApps.joinToString(", ")}"
-        }
-        binding.btnVpnDuration.text = String.format("Timer: %.1fs", vpnDurMs / 1000.0)
 
         // Sirf dikkat ho tab hi permission wali lines/button dikhao
         binding.statusAccessibility.visibility = if (accessibilityOn) View.GONE else View.VISIBLE

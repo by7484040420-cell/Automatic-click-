@@ -1,19 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Check,
   ChevronDown,
   ChevronUp,
-  Code2,
-  Copy,
-  Download,
   Play,
-  Plus,
   ShieldAlert,
-  Smartphone,
   Volume2,
-  Wifi,
-  WifiOff,
-  X,
 } from 'lucide-react';
 import {
   analyzeScreenText,
@@ -26,19 +17,10 @@ import {
 } from '../lib/areaPrefs';
 import { playOrderSound } from '../lib/soundPlayer';
 import { isSwipeZoneSet } from '../lib/swipeZone';
-import {
-  COMMON_APK_PRESETS,
-  formatVpnTargetLabel,
-  generateAndroidVpnKotlinCode,
-  generateManifestSnippet,
-  generateWatcherHookSnippet,
-} from '../lib/vpnNetPulse';
 import type {
   LiveWatcherStatus,
   PermissionState,
   ScreenId,
-  VpnPulseConfig,
-  VpnPulsePhase,
 } from '../types';
 
 interface MainDashboardProps {
@@ -51,11 +33,6 @@ interface MainDashboardProps {
   rootStateText: string;
   screenWatcherRunning: boolean;
   debugOverlayEnabled: boolean;
-  vpnConfig: VpnPulseConfig;
-  vpnPhase: VpnPulsePhase;
-  vpnCountdownMs: number;
-  onUpdateVpnConfig: (next: VpnPulseConfig) => void;
-  onTriggerVpnPulse: (reason: string) => void;
   onToggleStartStop: () => void;
   onNavigate: (screen: ScreenId) => void;
   onToggleBubble: () => void;
@@ -98,11 +75,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
   rootStateText,
   screenWatcherRunning,
   debugOverlayEnabled,
-  vpnConfig,
-  vpnPhase,
-  vpnCountdownMs,
-  onUpdateVpnConfig,
-  onTriggerVpnPulse,
   onToggleStartStop,
   onNavigate,
   onToggleBubble,
@@ -114,56 +86,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [sampleScreenText, setSampleScreenText] = useState(SAMPLE_ORDERS[0].text);
   const [scanAnimActive, setScanAnimActive] = useState(false);
-  const [customPkgInput, setCustomPkgInput] = useState('');
-  const [showKotlinCode, setShowKotlinCode] = useState(false);
-  const [kitTab, setKitTab] = useState<'service' | 'manifest' | 'hook'>('service');
-  const [copiedKotlin, setCopiedKotlin] = useState(false);
-
-  const toggleApkPackage = (pkg: string) => {
-    const clean = pkg.trim();
-    if (!clean) return;
-    const exists = vpnConfig.targetPackages.includes(clean);
-    const nextPackages = exists
-      ? vpnConfig.targetPackages.filter((p) => p !== clean)
-      : [...vpnConfig.targetPackages, clean];
-    onUpdateVpnConfig({ ...vpnConfig, targetPackages: nextPackages });
-  };
-
-  const handleAddCustomApk = () => {
-    const clean = customPkgInput.trim();
-    if (!clean) return;
-    if (!vpnConfig.targetPackages.includes(clean)) {
-      onUpdateVpnConfig({
-        ...vpnConfig,
-        targetMode: 'SELECTED_APPS',
-        targetPackages: [...vpnConfig.targetPackages, clean],
-      });
-    }
-    setCustomPkgInput('');
-  };
-
-  const kotlinCode = useMemo(() => generateAndroidVpnKotlinCode(vpnConfig), [vpnConfig]);
-  const manifestCode = useMemo(() => generateManifestSnippet(), []);
-  const hookCode = useMemo(() => generateWatcherHookSnippet(vpnConfig), [vpnConfig]);
-
-  const activeSnippet =
-    kitTab === 'service' ? kotlinCode : kitTab === 'manifest' ? manifestCode : hookCode;
-
-  const handleCopyKotlin = () => {
-    navigator.clipboard?.writeText(activeSnippet).catch(() => {});
-    setCopiedKotlin(true);
-    window.setTimeout(() => setCopiedKotlin(false), 2000);
-  };
-
-  const handleDownloadKotlin = () => {
-    const blob = new Blob([kotlinCode], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'NetPulseVpnService.kt';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   const pickupSelections = getPickupSelections();
   const dropSelections = getDropSelections();
@@ -202,12 +124,9 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
         ? `REJECT (R) match! ${liveAnalysis.reason}`
         : `NOT match: ${liveAnalysis.reason}`;
       onSimulateWatcherAccept('ORDER REJECTED', msg);
-      if (vpnConfig.enabled && liveAnalysis.triggerNetDrop) {
-        onTriggerVpnPulse(msg);
-      }
       window.setTimeout(() => {
-        onSimulateWatcherAccept('READY', `Net restored after ${msg}`);
-      }, vpnConfig.durationMs + 250);
+        onSimulateWatcherAccept('READY', `Ignored: ${msg}`);
+      }, 900);
       return;
     }
 
@@ -219,19 +138,19 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
       return;
     }
 
-    onSimulateWatcherAccept('ORDER FOUND', 'ORDER FOUND -> Turbo Accept swipe');
+    onSimulateWatcherAccept('ORDER FOUND', 'ORDER FOUND -> 0ms Trigger + 28ms Turbo Swipe');
     setScanAnimActive(true);
     window.setTimeout(() => {
       onSimulateWatcherAccept(
         'ORDER UTHA RAHA',
-        `SWIPE AUTO A DONE 18ms | ${liveAnalysis.reason}`
+        `SWIPE ZONE/AUTO A DONE 28ms | ${liveAnalysis.reason}`
       );
       playOrderSound();
-    }, 45);
+    }, 28);
     window.setTimeout(() => {
       setScanAnimActive(false);
       onSimulateWatcherAccept('READY', `Last order accepted: ${liveAnalysis.reason}`);
-    }, 500);
+    }, 450);
   };
 
   return (
@@ -324,288 +243,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
         </button>
       </div>
 
-      {/* 1-Second Auto Net-Off (VPN Pulse) Panel */}
-      <div
-        className={`mt-5 rounded-2xl border p-4 transition-colors ${
-          vpnPhase === 'NET_OFF_VPN'
-            ? 'border-[#EF5350] bg-[#3B1515]'
-            : vpnPhase === 'RECONNECTING'
-              ? 'border-[#FFB74D] bg-[#2D2414]'
-              : 'border-white/10 bg-[#1E1E1E]'
-        }`}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            {vpnPhase === 'NET_OFF_VPN' ? (
-              <WifiOff className="h-5 w-5 shrink-0 text-[#EF5350]" />
-            ) : (
-              <Wifi className="h-5 w-5 shrink-0 text-[#5AD278]" />
-            )}
-            <div>
-              <h2 className="font-display text-sm font-bold text-white">
-                1s Auto Net-Off (VPN Pulse)
-              </h2>
-              <p className="text-xs text-[#9E9E9E]">
-                Jab order <span className="font-bold text-[#EF5350]">R</span> par ho ya{' '}
-                <span className="font-bold text-[#5AD278]">A</span> se match na kare,{' '}
-                {(vpnConfig.durationMs / 1000).toFixed(1)}s ke liye net off karke turant auto-on karta hai
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <select
-              aria-label="VPN net off duration"
-              value={vpnConfig.durationMs}
-              onChange={(e) =>
-                onUpdateVpnConfig({ ...vpnConfig, durationMs: Number(e.target.value) })
-              }
-              className="font-mono-tabular h-9 rounded-lg border border-white/10 bg-[#2A2A2A] px-2.5 text-xs text-white focus:outline-none"
-            >
-              <option value={500}>0.5 sec</option>
-              <option value={800}>0.8 sec</option>
-              <option value={1000}>1.0 sec</option>
-              <option value={1500}>1.5 sec</option>
-              <option value={2000}>2.0 sec</option>
-            </select>
-
-            <button
-              type="button"
-              onClick={() => onUpdateVpnConfig({ ...vpnConfig, enabled: !vpnConfig.enabled })}
-              className={`min-h-[36px] rounded-lg px-3.5 text-xs font-bold text-white transition-colors ${
-                vpnConfig.enabled
-                  ? 'bg-[#43A047] hover:bg-[#388E3C]'
-                  : 'bg-[#616161] hover:bg-[#757575]'
-              }`}
-            >
-              {vpnConfig.enabled ? 'VPN PULSE: ON' : 'VPN PULSE: OFF'}
-            </button>
-          </div>
-        </div>
-
-        {/* Target Scope: Poora Phone vs Sirf Chune Hue APKs */}
-        <div className="mt-3 rounded-xl border border-white/10 bg-[#141414] p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 text-xs font-semibold text-[#B0BEC5]">
-              <Smartphone className="h-3.5 w-3.5 text-[#5AD278]" />
-              Net kiska band hoga?
-            </span>
-
-            <div className="grid grid-cols-2 gap-1.5 rounded-lg bg-[#1E1E1E] p-1">
-              <button
-                type="button"
-                onClick={() => onUpdateVpnConfig({ ...vpnConfig, targetMode: 'ALL_PHONE' })}
-                className={`rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${
-                  vpnConfig.targetMode === 'ALL_PHONE'
-                    ? 'bg-[#C62828] text-white'
-                    : 'text-[#9E9E9E] hover:text-white'
-                }`}
-              >
-                Poora Phone
-              </button>
-              <button
-                type="button"
-                onClick={() => onUpdateVpnConfig({ ...vpnConfig, targetMode: 'SELECTED_APPS' })}
-                className={`rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${
-                  vpnConfig.targetMode === 'SELECTED_APPS'
-                    ? 'bg-[#43A047] text-white'
-                    : 'text-[#9E9E9E] hover:text-white'
-                }`}
-              >
-                Chune Hue APKs ({vpnConfig.targetPackages.length})
-              </button>
-            </div>
-          </div>
-
-          {vpnConfig.targetMode === 'ALL_PHONE' ? (
-            <p className="mt-2 text-xs text-[#9E9E9E]">
-              Reject order aate hi <span className="font-semibold text-white">pure phone</span> ka net{' '}
-              {(vpnConfig.durationMs / 1000).toFixed(1)}s ke liye off hokar turant auto-on hoga.
-            </p>
-          ) : (
-            <div className="mt-2.5 space-y-2.5">
-              <p className="text-xs text-[#9E9E9E]">
-                Sirf niche chune hue APKs ka net {(vpnConfig.durationMs / 1000).toFixed(1)}s ke liye
-                band-chalu hoga (baaki apps chalu rahenge):
-              </p>
-
-              {/* Quick APK Presets */}
-              <div className="flex flex-wrap gap-1.5">
-                {COMMON_APK_PRESETS.map((preset) => {
-                  const active = vpnConfig.targetPackages.includes(preset.pkg);
-                  return (
-                    <button
-                      key={preset.pkg}
-                      type="button"
-                      onClick={() => toggleApkPackage(preset.pkg)}
-                      className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
-                        active
-                          ? 'border-[#43A047] bg-[#1B3A22] text-[#81C784]'
-                          : 'border-white/10 bg-[#1E1E1E] text-[#B0BEC5] hover:border-white/25 hover:text-white'
-                      }`}
-                    >
-                      {active && <Check className="h-3 w-3" />}
-                      <span>{preset.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Add Custom APK Package Name */}
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={customPkgInput}
-                  onChange={(e) => setCustomPkgInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddCustomApk();
-                    }
-                  }}
-                  placeholder="Custom APK package daalein (e.g. com.porter.driver)"
-                  className="h-9 flex-1 rounded-lg border border-white/10 bg-[#1E1E1E] px-3 text-xs text-white placeholder-[#757575] focus:border-[#43A047] focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddCustomApk}
-                  className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#2A2A2A] px-3 text-xs font-bold text-white hover:bg-[#363636]"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  <span>Add APK</span>
-                </button>
-              </div>
-
-              {/* Active Selected Packages */}
-              {vpnConfig.targetPackages.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {vpnConfig.targetPackages.map((pkg) => (
-                    <span
-                      key={pkg}
-                      className="font-mono-tabular inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-[#222222] px-2 py-1 text-[11px] text-white"
-                    >
-                      {pkg}
-                      <button
-                        type="button"
-                        aria-label={`Remove ${pkg}`}
-                        onClick={() => toggleApkPackage(pkg)}
-                        className="text-[#9E9E9E] hover:text-[#EF5350]"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs font-medium text-[#FFB74D]">
-                  Koi APK select nahi hai — kam se kam 1 APK select karein ya Poora Phone chunein.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs">
-          <span className="font-mono-tabular font-semibold text-white">
-            {vpnPhase === 'NET_OFF_VPN'
-              ? `NET OFF [${formatVpnTargetLabel(vpnConfig)}] — ${(vpnCountdownMs / 1000).toFixed(1)}s me auto ON hoga`
-              : vpnPhase === 'RECONNECTING'
-                ? 'NET AUTO-ON HO RAHA HAI...'
-                : `VPN Status: CONNECTED (${formatVpnTargetLabel(vpnConfig)})`}
-          </span>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowKotlinCode((prev) => !prev)}
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-white/10 bg-[#141414] px-3 py-1.5 text-xs font-semibold text-[#B0BEC5] hover:text-white"
-            >
-              <Code2 className="h-3.5 w-3.5 text-[#5AD278]" />
-              <span>{showKotlinCode ? 'APK Code Chhupayein' : 'Android APK VPN Code'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onTriggerVpnPulse('Manual 1s Net-Off Test')}
-              className="min-h-[34px] rounded-lg bg-[#2A2A2A] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#363636]"
-            >
-              Test 1s Net-Off
-            </button>
-          </div>
-        </div>
-
-        {/* Ready-to-Use GitHub Android APK Integration Kit */}
-        {showKotlinCode && (
-          <div className="mt-3 rounded-xl border border-white/10 bg-[#121212] p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-bold text-white">
-                  GitHub Android APK Kit (by7484040420-cell/Automatic-click-)
-                </p>
-                <p className="text-[11px] text-[#9E9E9E]">
-                  Mode: <span className="text-white">{formatVpnTargetLabel(vpnConfig)}</span> ·{' '}
-                  {(vpnConfig.durationMs / 1000).toFixed(1)}s auto-restore
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleCopyKotlin}
-                  className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#2A2A2A] px-2.5 text-xs font-semibold text-white hover:bg-[#363636]"
-                >
-                  {copiedKotlin ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-[#5AD278]" />
-                      <span>Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5" />
-                      <span>Copy Tab</span>
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDownloadKotlin}
-                  className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#43A047] px-2.5 text-xs font-semibold text-white hover:bg-[#388E3C]"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  <span>Download .kt</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {(
-                [
-                  { id: 'service', label: '1. NetPulseVpnService.kt' },
-                  { id: 'manifest', label: '2. AndroidManifest.xml' },
-                  { id: 'hook', label: '3. OrderWatcher Hook' },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setKitTab(tab.id)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${
-                    kitTab === tab.id
-                      ? 'bg-[#43A047] text-white'
-                      : 'bg-[#1E1E1E] text-[#9E9E9E] hover:text-white'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <pre className="font-mono-tabular mt-2.5 max-h-64 overflow-auto rounded-lg bg-black/50 p-3 text-[11px] leading-relaxed text-[#CFD8DC]">
-              {activeSnippet}
-            </pre>
-          </div>
-        )}
-      </div>
-
       {/* Live OrderWatcher Matching & Swipe Test Bench */}
       <div className="mt-5 rounded-2xl border border-white/10 bg-[#1E1E1E] p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -614,7 +251,7 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
               Order Watcher Live Test
             </h2>
             <p className="text-xs text-[#9E9E9E]">
-              Screen text parser, A/R matching, 1s VPN drop aur Trip Details guard test karein
+              Screen text parser, A/R matching aur Trip Details guard test karein
             </p>
           </div>
           <span
@@ -684,17 +321,14 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
           <div className="text-sm">
             {liveAnalysis.isTripDetails ? (
               <p className="font-medium text-[#FFB74D]">
-                Trip Details screen detected — auto-accept & net-off safely blocked
+                Trip Details screen detected — auto-accept safely blocked
               </p>
             ) : liveAnalysis.matched ? (
               <p className="font-medium text-[#5AD278]">{liveAnalysis.reason}</p>
             ) : (
               <p className="flex items-center gap-1.5 font-medium text-[#EF5350]">
                 <ShieldAlert className="h-4 w-4 shrink-0" />
-                <span>
-                  {liveAnalysis.reason}
-                  {vpnConfig.enabled ? ' → 1s Net-Off trigger hoga' : ''}
-                </span>
+                <span>{liveAnalysis.reason}</span>
               </p>
             )}
           </div>
@@ -786,36 +420,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
             >
               {debugOverlayEnabled ? 'Debug Overlay BAND Karein' : 'Debug Overlay ON Karein'}
             </button>
-
-            {/* Companion Webhook / Android Bridge Config for Phone-Wide VPN Off/On */}
-            <div className="rounded-xl border border-white/10 bg-[#141414] p-3.5">
-              <p className="text-xs font-semibold text-[#FFB74D]">
-                Android VPN / MacroDroid / Tasker Bridge (Optional)
-              </p>
-              <p className="mt-1 text-xs text-[#9E9E9E]">
-                Agar aap MacroDroid/Tasker ya Android WebView bridge use kar rahe hain to phone-wide 1s net off/on ke liye local webhook URLs daal sakte hain:
-              </p>
-              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <input
-                  type="url"
-                  value={vpnConfig.webhookOffUrl}
-                  onChange={(e) =>
-                    onUpdateVpnConfig({ ...vpnConfig, webhookOffUrl: e.target.value })
-                  }
-                  placeholder="Net OFF Webhook (e.g. http://127.0.0.1:8765/vpn-off)"
-                  className="h-10 rounded-lg border border-white/10 bg-[#222222] px-3 text-xs text-white placeholder-[#757575] focus:border-[#43A047] focus:outline-none"
-                />
-                <input
-                  type="url"
-                  value={vpnConfig.webhookOnUrl}
-                  onChange={(e) =>
-                    onUpdateVpnConfig({ ...vpnConfig, webhookOnUrl: e.target.value })
-                  }
-                  placeholder="Net ON Webhook (e.g. http://127.0.0.1:8765/vpn-on)"
-                  className="h-10 rounded-lg border border-white/10 bg-[#222222] px-3 text-xs text-white placeholder-[#757575] focus:border-[#43A047] focus:outline-none"
-                />
-              </div>
-            </div>
           </div>
         )}
       </div>

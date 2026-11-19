@@ -54,7 +54,11 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
       }
     }
     const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.click();
   };
 
   const handleCheckApproval = async () => {

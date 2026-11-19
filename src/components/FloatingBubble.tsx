@@ -88,7 +88,7 @@ export const FloatingBubble: React.FC<FloatingBubbleProps> = ({
     label = 'ORDER\nUTH RAHA';
     bg = '#00C853';
   } else if (watcherStatus === 'ORDER REJECTED') {
-    label = 'NET OFF\n1s VPN';
+    label = 'ORDER\nREJECTED';
     bg = '#C62828';
   } else if (watcherStatus === 'OFF') {
     label = 'AUTO\nOFF';
