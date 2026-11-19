@@ -95,6 +95,7 @@ class OrderWatcherService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         SwipeZone.service = this
+        NetPulseVpnService.warmUp(applicationContext)
         handler.post(licenseRunnable)
         showOnNotification()
         setStatus("READY")
@@ -1060,6 +1061,7 @@ class OrderWatcherService : AccessibilityService() {
         lastVpnAttemptAt = now
 
         val ok = NetPulseVpnService.triggerPulse(applicationContext)
+        if (NetPulseVpnService.instance == null) NetPulseVpnService.warmUp(applicationContext)
         if (ok) {
             // FIX: cooldown tabhi lagao jab net-off sach me chala (pehle fail par bhi lag jata tha)
             lastVpnPulseAt = now
