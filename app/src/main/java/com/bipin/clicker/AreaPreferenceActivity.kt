@@ -361,7 +361,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
             }
 
             var childrenBuilt = false
-            var displayLimit = 60
+            var displayLimit = 150
 
             fun refreshHeaderBoxes() {
                 val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
@@ -511,7 +511,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     childContainer.addView(Button(this@AreaPreferenceActivity).apply {
                         text = "Aur $remaining jagah dikhayein (search se jaldi milega)"
                         setOnClickListener {
-                            displayLimit += 80
+                            displayLimit += 150
                             buildChildRows()
                         }
                     })

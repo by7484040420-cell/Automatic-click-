@@ -452,6 +452,9 @@ object AreaPrefs {
         "noida" to listOf("noida", "new okhla", "noida extension"),
         "ghaziabad" to listOf("ghaziabad", "gzb"),
         "faridabad" to listOf("faridabad", "fbd"),
+        "sonipat" to listOf("sonipat", "sonepat"),
+        "bahadurgarh" to listOf("bahadurgarh", "bahadurgadh"),
+        "meerut" to listOf("meerut", "merath"),
     )
 
     private fun cityAliases(normalizedCity: String): List<String> =
