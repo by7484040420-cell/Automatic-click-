@@ -22,12 +22,8 @@ import androidx.core.app.NotificationCompat
 /**
  * Reads the live order screen and tries the accept control as soon as it is actionable.
  *
- * v5 FIXES:
- * 1) Runtime check - service sach mein gesture kar sakta hai ya nahi (canPerformGestures)
- * 2) dispatchGesture=false hone par SAFA warning (Magnification gesture conflict)
- * 3) Two-stroke press-hold-drag gesture - Porter jaise apps ACTION_DOWN ko theek se
- *    register karte hain, isliye pehle chhota hold phir drag
- * 4) Swipe ke baad verify + auto-retry loop (event ka intezaar nahi karta)
+ * Restored immediate-trigger OrderWatcherService (instant scan on event, 0ms deferral,
+ * 15ms fast retry, 30ms swipe) with ScreenWatcherService & prewarm compatibility.
  */
 class OrderWatcherService : AccessibilityService() {
 
@@ -39,25 +35,20 @@ class OrderWatcherService : AccessibilityService() {
         @Volatile
         var instance: OrderWatcherService? = null
 
-        private const val FAST_RETRY_MS = 35L
-        private const val FAST_RETRY_WINDOW_MS = 1600L
-        private const val CLICK_COOLDOWN_MS = 70L
-        private const val OCR_INTERVAL_MS = 750L
-        // Ek order (popup) par kitni baar swipe karna hai (OCR path).
-        private const val MAX_TRIES_PER_POPUP = 2
-        // Millisecond turbo swipe duration (ms): human (~250-400ms) se ~10x tez, reliable 2-3 move frames
-        private const val SWIPE_MS = 28L
+        private const val FAST_RETRY_MS = 15L
+        private const val FAST_RETRY_WINDOW_MS = 5200L
+        private const val CLICK_COOLDOWN_MS = 450L
+        private const val OCR_INTERVAL_MS = 4000L
+        // Ek order (popup) par kitni baar swipe karna hai. Abhi: SIRF EK BAAR.
+        private const val MAX_TRIES_PER_POPUP = 1
+        // Swipe kitni der ka ho (ms). Ek hi seedha, tez swipe.
+        private const val SWIPE_MS = 30L
 
-        private const val VERIFY_INTERVAL_MS = 55L
-        private const val VERIFY_MAX_ATTEMPTS = 10
+        private const val VERIFY_INTERVAL_MS = 150L
+        private const val VERIFY_MAX_ATTEMPTS = 18
 
-        private val COUNTDOWN_TAIL_RE = Regex("accept\\s*in\\s*\\d+\\s*s?", RegexOption.IGNORE_CASE)
-        private val NON_ALNUM_RE = Regex("[^a-z0-9]+")
         private val ACCEPT_WORDS = listOf(
             "accept", "confirm", "take order", "accept order", "accept now"
-        )
-        private val ACCEPT_COMPACT = listOf(
-            "accept", "confirm", "takeorder", "acceptorder", "acceptnow"
         )
     }
 
@@ -80,11 +71,6 @@ class OrderWatcherService : AccessibilityService() {
 
     // FIX: scan throttle + gesture overlap guard + debug spam guard
     private var lastScanAt = 0L
-    private var pendingScanScheduled = false
-    private val trailingScanRunnable = Runnable {
-        pendingScanScheduled = false
-        scanNow(forceInstant = true)
-    }
     private val ocrLock = Any()
     @Volatile private var ocrBusy = false
     private var lastOcrHeartbeat = 0L
@@ -97,13 +83,11 @@ class OrderWatcherService : AccessibilityService() {
     private var treeDoneAt = 0L
     private var ocrLastSeenAt = 0L
     private var swipeTry = 0
-    private var lastNotifiedStatus = ""
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         SwipeZone.service = this
-        // Background thread par saare rules, regexes aur OCR recognizer pehle se warm rakho (0ms cold start)
         Thread {
             try {
                 AreaPrefs.prewarm(applicationContext)
@@ -115,7 +99,7 @@ class OrderWatcherService : AccessibilityService() {
         showOnNotification()
         setStatus("READY")
         // OCR loop: screen ke PIXELS se text padhta hai (photo/screenshot/camera me dikhi screen bhi)
-        handler.postDelayed(ocrRunnable, 750L)
+        handler.postDelayed(ocrRunnable, 1500L)
 
         // FIX (naya): runtime par check karo ki gesture injection ka permission
         // SAHI SE mila hai ya nahi. Agar false hai to service chal to rahi hai
@@ -144,151 +128,84 @@ class OrderWatcherService : AccessibilityService() {
         if (event.packageName?.toString() == packageName) return
 
         when (event.eventType) {
-            // Popup khulte hi 0ms par turant scan (koi throttle nahi)
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> scanNow(forceInstant = true)
-
-            // Text / layout update par 14ms fast scan + trailing guarantee (koi update miss na ho)
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> scanNow(forceInstant = false, minIntervalMs = 14L)
-
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_VIEW_SCROLLED,
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> scanNow(forceInstant = false, minIntervalMs = 40L)
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> scanNow()
             else -> Unit
         }
     }
 
-    private fun scheduleTrailingScan(delayMs: Long) {
-        if (pendingScanScheduled) return
-        pendingScanScheduled = true
-        handler.postDelayed(trailingScanRunnable, delayMs)
-    }
-
-    private fun fastContainsAccept(text: String): Boolean {
-        return text.contains("accept", ignoreCase = true) ||
-            text.contains("confirm", ignoreCase = true) ||
-            text.contains("take order", ignoreCase = true) ||
-            text.contains("takeorder", ignoreCase = true)
-    }
-
-    private fun scanNow(forceInstant: Boolean = false, minIntervalMs: Long = 14L) {
-        if (AreaPrefs.isPaused(applicationContext)) return
+    private fun scanNow() {
         if (!LicenseManager.isActive(applicationContext)) return
+        if (AreaPrefs.isPaused(applicationContext)) return
 
+        // FIX: itne events aate hain ki main thread jam ho jata tha -> gesture late/cancel
         val tNow = SystemClock.uptimeMillis()
-        val elapsed = tNow - lastScanAt
-        if (!forceInstant && elapsed < minIntervalMs) {
-            scheduleTrailingScan((minIntervalMs - elapsed).coerceAtLeast(4L))
-            return
-        }
-        if (pendingScanScheduled) {
-            pendingScanScheduled = false
-            handler.removeCallbacks(trailingScanRunnable)
-        }
+        if (tNow - lastScanAt < 15L) return
         lastScanAt = tNow
 
-        // Sabse pehle active window check karo (0 extra IPC); yahin 95% order popups aate hain
-        var activeWindowId = -1
-        val activeRoot = try { rootInActiveWindow } catch (_: Exception) { null }
-        if (activeRoot != null) {
-            activeWindowId = try { activeRoot.windowId } catch (_: Exception) { -1 }
-            try {
-                if (scanRootNode(activeRoot)) return
-            } catch (e: Exception) {
-                Log.e(TAG, "active scan error", e)
-            } finally {
-                try { activeRoot.recycle() } catch (_: Exception) {}
-            }
-        }
+        val roots = currentRoots()
+        if (roots.isEmpty()) return
 
-        // Overlay / multi-window popups ke liye baaki windows check karo
-        val extraRoots = currentExtraRoots(activeWindowId)
-        for (root in extraRoots) {
+        for (root in roots) {
             try {
-                if (scanRootNode(root)) return
+                if (root.packageName == packageName) continue
+                val pk = root.packageName?.toString()
+                if (pk == "com.oplus.screenrecorder" || pk == "com.android.systemui") continue
+
+                val texts = mutableListOf<String>()
+                collectText(root, texts)
+                val screenText = texts.joinToString(" | ")
+
+                if (screenText.isBlank()) continue
+                if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) {
+                    reportDebug(
+                        "Scan (${root.packageName}):\n\"${screenText.take(150)}\"\n-> NOT match"
+                    )
+                    continue
+                }
+
+                // Order accept ho chuka: Trip Details screen par kuch nahi karna
+                if (isTripDetailsScreen(screenText)) {
+                    reportDebug("Trip Details screen - yaha tap nahi (order pehle hi uth chuka)")
+                    continue
+                }
+
+                setStatus("ORDER FOUND")
+
+                val signature = "${root.packageName}:${screenText.hashCode()}"
+                val now = System.currentTimeMillis()
+
+                if (verifyAttemptsLeft > 0 && signature == lastSignature) {
+                    continue
+                }
+
+                // Every newly-seen order gets an immediate action attempt.
+                // Do not use the screen-text hash as a hard gate: the countdown
+                // text changes every second and the Accept control may only become
+                // actionable after a short delay.
+                if (now - treeDoneAt > 9000L && (signature != lastSignature || now - lastActionAt >= 220L)) {
+                    if (findAndAccept(root)) {
+                        treeDoneAt = now
+                        lastSignature = signature
+                        lastActionAt = now
+                        setStatus("ORDER UTHA RAHA")
+                        showDebugToast("Bipin Clicker: Order uthane ka action")
+                        reportDebug("ORDER UTHA RAHA - live Accept control par gesture bheja")
+                    } else {
+                        reportDebug("Accept control nahi mila - live screen ko fast retry kar raha hoon")
+                        startFastRetry()
+                    }
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "extra scan error", e)
+                Log.e(TAG, "scan error", e)
             } finally {
                 try { root.recycle() } catch (_: Exception) {}
             }
         }
-    }
-
-    private fun scanRootNode(root: AccessibilityNodeInfo): Boolean {
-        val pk = root.packageName?.toString()
-        if (pk == packageName || pk == "com.oplus.screenrecorder" || pk == "com.android.systemui") return false
-
-        val sb = StringBuilder(512)
-        val acceptHolder = arrayOfNulls<AccessibilityNodeInfo>(1)
-        collectFast(root, sb, acceptHolder)
-        if (sb.isEmpty()) return false
-        val screenText = sb.toString()
-
-        // Fast idle skip: agar screen par accept/confirm button hi nahi hai to regex match mat chalao
-        val acceptNode = acceptHolder[0]
-        if (acceptNode == null && !fastContainsAccept(screenText)) {
-            if (DebugOverlay.ENABLED) {
-                reportDebug("Scan ($pk):\n\"${screenText.take(150)}\"\n-> NOT match")
-            }
-            return false
-        }
-
-        // Order accept ho chuka: Trip Details screen par kuch nahi karna (fast check before regex)
-        if (isTripDetailsScreen(screenText)) {
-            reportDebug("Trip Details screen - yaha tap nahi (order pehle hi uth chuka)")
-            return false
-        }
-
-        if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) {
-            if (DebugOverlay.ENABLED) {
-                val isExplicitR = AreaPrefs.matchesRejectText(applicationContext, screenText)
-                if (screenHasAcceptWord(screenText)) {
-                    reportDebug(
-                        if (isExplicitR) "REJECT (R) match -> ignore\n\"${screenText.take(110)}\""
-                        else "A rules NOT match -> ignore\n\"${screenText.take(110)}\""
-                    )
-                } else {
-                    reportDebug("Scan ($pk):\n\"${screenText.take(150)}\"\n-> NOT match")
-                }
-            }
-            return false
-        }
-
-        val stableText = COUNTDOWN_TAIL_RE.replace(screenText, "")
-        val signature = "${pk.orEmpty()}:${stableText.hashCode()}"
-        val now = System.currentTimeMillis()
-        val isSameOrder = (signature == lastSignature)
-
-        if (verifyAttemptsLeft > 0 && isSameOrder) {
-            return false
-        }
-
-        // Naya order: 0ms wait! Same order dobara: 180ms baad
-        if (!isSameOrder || (now - treeDoneAt > 180L && now - lastActionAt >= CLICK_COOLDOWN_MS)) {
-            val dispatched = if (SwipeZone.isSet(applicationContext)) {
-                slideGesture(0f, 0f, 0f, "ZONE", durationOverrideMs = SWIPE_MS)
-            } else {
-                (acceptNode != null && acceptFromNodeFast(acceptNode)) || findAndAccept(root)
-            }
-
-            if (dispatched) {
-                treeDoneAt = now
-                lastSignature = signature
-                lastActionAt = now
-                // Turant 55ms par verify + auto-retry chalu karo (agar frame-1 miss hua ho to turant recover)
-                startVerifyRetry()
-                handler.post {
-                    setStatus("ORDER UTHA RAHA")
-                    reportDebug("ORDER UTHA RAHA - turbo ${SWIPE_MS}ms swipe bheja")
-                }
-                return true
-            } else {
-                setStatus("ORDER FOUND")
-                reportDebug("Accept control nahi mila - 35ms fast retry")
-                startFastRetry()
-            }
-        }
-        return false
     }
 
     // ------------------------------------------------------------------
@@ -303,64 +220,47 @@ class OrderWatcherService : AccessibilityService() {
             }
             if (verifyAttemptsLeft-- <= 0) {
                 setStatus("READY")
-                reportDebug("Verify khatam - order close/timeout")
+                reportDebug("Verify khatam - sab tries fail, order accept nahi hua")
                 return
             }
 
-            val roots = ArrayList<AccessibilityNodeInfo>(4)
-            var activeWindowId = -1
-            try {
-                rootInActiveWindow?.let { r ->
-                    activeWindowId = try { r.windowId } catch (_: Exception) { -1 }
-                    roots.add(r)
-                }
-            } catch (_: Exception) {
-            }
-
+            val roots = currentRoots()
             var stillAcceptVisible = false
             var matchRoot: AccessibilityNodeInfo? = null
 
-            fun inspectRoots(list: List<AccessibilityNodeInfo>) {
-                for (root in list) {
-                    var keep = false
-                    try {
-                        if (stillAcceptVisible) continue
-                        val pk = root.packageName?.toString()
-                        if (pk == packageName || pk == "com.android.systemui") continue
-                        val sb = StringBuilder(512)
-                        collectText(root, sb)
-                        if (sb.isEmpty()) continue
-                        val screenText = sb.toString()
+            for (root in roots) {
+                try {
+                    if (root.packageName == packageName) continue
+                    val texts = mutableListOf<String>()
+                    collectText(root, texts)
+                    val screenText = texts.joinToString(" | ")
+                    if (screenText.isBlank()) continue
 
-                        if (isTripDetailsScreen(screenText)) continue
-                        if (!fastContainsAccept(screenText)) continue
-                        if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) continue
+                    if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) continue
 
-                        if (screenHasAcceptWord(screenText)) {
-                            stillAcceptVisible = true
-                            matchRoot = root
-                            keep = true
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "verify error", e)
-                    } finally {
-                        if (!keep) {
-                            try { root.recycle() } catch (_: Exception) {}
-                        }
+                    // Trip Details screen = order accept ho gaya, retry nahi
+                    if (isTripDetailsScreen(screenText)) continue
+
+                    if (screenHasAcceptWord(screenText)) {
+                        stillAcceptVisible = true
+                        matchRoot = root
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "verify error", e)
+                } finally {
+                    if (matchRoot !== root) {
+                        try { root.recycle() } catch (_: Exception) {}
                     }
                 }
             }
 
-            inspectRoots(roots)
-            if (!stillAcceptVisible) {
-                inspectRoots(currentExtraRoots(activeWindowId))
-            }
-
             if (!stillAcceptVisible) {
                 verifyAttemptsLeft = 0
-                lastSignature = null
-                setStatus("READY")
-                reportDebug("Order accept/dismiss ho gaya (verify clear)")
+                setStatus("ACTION RESULT UNKNOWN")
+                reportDebug(
+                    "Accept control screen se gayab ho gaya. " +
+                        "Gesture complete hua, lekin Accessibility se acceptance confirm nahi ki ja sakti."
+                )
                 matchRoot?.let { try { it.recycle() } catch (_: Exception) {} }
                 return
             }
@@ -368,22 +268,16 @@ class OrderWatcherService : AccessibilityService() {
             matchRoot?.let { r ->
                 try {
                     verifySwipesDone++
-                    val done = when (verifySwipesDone) {
-                        // Try 1: dynamic node bounds se 42ms swipe (agar SwipeZone shift hua ho)
-                        1 -> findAndAccept(r, preferZone = false, durationOverrideMs = 42L)
-                        // Try 2: 58ms swipe + click fallback
-                        2 -> findAndAccept(r, preferZone = true, durationOverrideMs = 58L) ||
-                            clickNodeOrParent(r, tapFallback = true)
-                        // Try 3+: alternate click & firmer 75ms swipe
-                        else -> if (verifySwipesDone % 2 == 1) {
-                            clickNodeOrParent(r, tapFallback = true) ||
-                                findAndAccept(r, preferZone = false, durationOverrideMs = 75L)
-                        } else {
-                            findAndAccept(r, preferZone = false, durationOverrideMs = 75L)
-                        }
+                    val done = if (verifySwipesDone % 4 == 0) {
+                        clickNodeOrParent(r) || findAndAccept(r)
+                    } else {
+                        findAndAccept(r)
                     }
                     lastActionAt = System.currentTimeMillis()
-                    reportDebug("Verify retry #$verifySwipesDone -> action=$done")
+                    reportDebug(
+                        "Verify retry #$verifySwipesDone -> action=$done " +
+                            "(swipe ${if (verifySwipesDone % 4 == 0) "+click" else "only"})"
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "verify retry error", e)
                 } finally {
@@ -433,21 +327,16 @@ class OrderWatcherService : AccessibilityService() {
         }
     }
 
-    private fun currentExtraRoots(excludeWindowId: Int): List<AccessibilityNodeInfo> {
-        val roots = ArrayList<AccessibilityNodeInfo>(4)
+    private fun currentRoots(): List<AccessibilityNodeInfo> {
+        val roots = LinkedHashSet<AccessibilityNodeInfo>()
         try {
             windows?.forEach { window ->
-                val type = window.type
-                if ((type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION ||
-                        type == android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM) &&
-                    window.id != excludeWindowId
-                ) {
-                    window.root?.let { roots.add(it) }
-                }
+                window.root?.let { roots.add(it) }
             }
         } catch (_: Exception) {
         }
-        return roots
+        if (roots.isEmpty()) rootInActiveWindow?.let { roots.add(it) }
+        return roots.toList()
     }
 
     private fun startFastRetry() {
@@ -473,48 +362,42 @@ class OrderWatcherService : AccessibilityService() {
                     return
                 }
 
-                scanNow(forceInstant = true)
+                scanNow()
                 handler.postDelayed(this, FAST_RETRY_MS)
             }
         })
     }
 
-    private fun acceptFromNodeFast(
-        node: AccessibilityNodeInfo,
-        preferZone: Boolean = true,
-        durationOverrideMs: Long = SWIPE_MS
-    ): Boolean {
-        if (preferZone && SwipeZone.isSet(applicationContext) &&
-            slideGesture(0f, 0f, 0f, "ZONE", durationOverrideMs)
-        ) return true
-        if (swipeAcceptControl(node, durationOverrideMs)) return true
-        if (SwipeZone.isSet(applicationContext) &&
-            slideGesture(0f, 0f, 0f, "ZONE", durationOverrideMs)
-        ) return true
-        if (geometricSlideFromNode(node, durationOverrideMs)) return true
-        return clickNodeOrParent(node, tapFallback = true)
-    }
-
-    private fun findAndAccept(
-        node: AccessibilityNodeInfo?,
-        preferZone: Boolean = true,
-        durationOverrideMs: Long = SWIPE_MS
-    ): Boolean {
+    private fun findAndAccept(node: AccessibilityNodeInfo?): Boolean {
         if (node == null) return false
 
         val raw = nodeText(node).lowercase().trim()
-        if (fastContainsAccept(raw) && !raw.contains("pickup") && !raw.contains("drop")) {
-            val compact = NON_ALNUM_RE.replace(raw, "")
-            val isAcceptNode = ACCEPT_COMPACT.any { compact.contains(it) } ||
-                ACCEPT_WORDS.any { raw.contains(it) }
-            if (isAcceptNode) {
-                if (acceptFromNodeFast(node, preferZone, durationOverrideMs)) return true
-            }
+        val compact = raw.replace(Regex("[^a-z0-9]+"), "")
+
+        // Match the actual Accept control, including the countdown label.
+        // "pickup" / "drop" are deliberately NOT accepted as matches.
+        val isAcceptNode = ACCEPT_WORDS.any { word ->
+            raw.contains(word) ||
+                compact.contains(word.replace(Regex("[^a-z0-9]+"), ""))
+        }
+
+        if (isAcceptNode && !raw.contains("pickup") && !raw.contains("drop")) {
+            // The slider is the primary action. A click is only a fallback.
+            val swiped = swipeAcceptControl(node)
+            reportDebug("Accept control mila. SWIPE dispatched=$swiped")
+            if (swiped) return true
+
+            if (SwipeZone.isSet(applicationContext) && slideGesture(0f, 0f, 0f, "ZONE")) return true
+            // STRICT: slider ka dabba nahi mila to andaze se swipe nahi (OCR wala tareeka pixel se pakadta hai)
+
+            val clicked = clickNodeOrParent(node, tapFallback = true)
+            reportDebug("SWIPE dispatch nahi hua; CLICK fallback=$clicked")
+            if (clicked) return true
         }
 
         for (i in 0 until node.childCount) {
             val child = try { node.getChild(i) } catch (_: Exception) { null }
-            if (child != null && findAndAccept(child, preferZone, durationOverrideMs)) return true
+            if (child != null && findAndAccept(child)) return true
         }
 
         return false
@@ -567,7 +450,7 @@ class OrderWatcherService : AccessibilityService() {
 
     private fun runOcrOnce() {
         if (!LicenseManager.isActive(applicationContext)) return
-        // Jab 60fps ScreenWatcher chal raha ho to slow takeScreenshot() mat chalao
+        // Jab ScreenWatcher chal raha ho to slow takeScreenshot() mat chalao
         if (ScreenWatcherService.running) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             if (!ocrNoSupportShown) {
@@ -577,7 +460,8 @@ class OrderWatcherService : AccessibilityService() {
             return
         }
         if (AreaPrefs.isPaused(applicationContext)) return
-        if (System.currentTimeMillis() - lastActionAt < 180L) return
+        // Action ke turant baad screenshot mat lo (phone ka screenshot popup slider ke upar aa jata hai)
+        if (System.currentTimeMillis() - lastActionAt < 600L) return
         if (SystemClock.uptimeMillis() < slideInFlightUntil) return
         val pm = getSystemService(PowerManager::class.java)
         if (pm != null && !pm.isInteractive) return
@@ -586,10 +470,9 @@ class OrderWatcherService : AccessibilityService() {
             if (ocrBusy) return
             ocrBusy = true
         }
-
         ScreenOcrScanner.capture(this) { res, err ->
-            ocrBusy = false
             handler.post {
+                ocrBusy = false
                 if (res == null) {
                     if (err != null && !err.contains("error 3")) reportDebug("OCR: $err")
                 } else {
@@ -605,7 +488,7 @@ class OrderWatcherService : AccessibilityService() {
         }
     }
 
-    /** ScreenWatcherService (60fps MediaProjection) se aayi live frame par turant OCR (direct background thread). */
+    /** ScreenWatcherService (MediaProjection) se aayi live frame par turant OCR. */
     fun submitWatcherFrame(bmp: Bitmap) {
         if (!LicenseManager.isActive(applicationContext) ||
             AreaPrefs.isPaused(applicationContext) ||
@@ -622,9 +505,9 @@ class OrderWatcherService : AccessibilityService() {
             ocrBusy = true
         }
         ScreenOcrScanner.recognize(bmp) { res, _ ->
-            ocrBusy = false
-            if (res != null) {
-                handler.post {
+            handler.post {
+                ocrBusy = false
+                if (res != null) {
                     try {
                         handleOcr(res)
                     } catch (e: Exception) {
@@ -632,9 +515,9 @@ class OrderWatcherService : AccessibilityService() {
                     } finally {
                         try { res.bitmap.recycle() } catch (_: Exception) {}
                     }
+                } else {
+                    try { bmp.recycle() } catch (_: Exception) {}
                 }
-            } else {
-                try { bmp.recycle() } catch (_: Exception) {}
             }
         }
     }
@@ -674,53 +557,48 @@ class OrderWatcherService : AccessibilityService() {
             return
         }
         if (!AreaPrefs.matchesScreenText(applicationContext, text)) {
-            val isExplicitR = AreaPrefs.matchesRejectText(applicationContext, text)
-            reportDebug("OCR: ${if (isExplicitR) "REJECT (R)" else "A not match"}\n${text.take(120)}")
+            reportDebug("OCR: Accept mila par Pickup/Drop match NAHI\n${text.take(140)}")
             return
         }
         val nowT = System.currentTimeMillis()
-        if (nowT - ocrLastSeenAt > 450L) ocrAttempts = 0 // popup gayab hua tha -> naya order
+        if (nowT - ocrLastSeenAt > 2000L) ocrAttempts = 0 // popup gayab hua tha -> naya order
         ocrLastSeenAt = nowT
         if (ocrAttempts >= MAX_TRIES_PER_POPUP) {
+            // is order par ek koshish ho chuki; popup khatam hone tak kuch nahi karna
             return
         }
-        if (nowT - lastActionAt < 110L) return
+        if (nowT - lastActionAt < 600L) return
         // Pichla swipe abhi chal raha hai -> naya mat bhejo, aur koshish ginti me mat jodo
         if (SystemClock.uptimeMillis() < slideInFlightUntil) return
 
         setStatus("ORDER FOUND")
         ocrAttempts++
-        val dur = if (ocrAttempts == 1) SWIPE_MS else 48L
         val bmpW = res.bitmap.width.toFloat()
-        val slider = if (ocrAttempts == 1 && SwipeZone.isSet(applicationContext)) null
-        else ScreenOcrScanner.estimateSlider(res.bitmap, acceptLine.box)
-
-        val ok = if (ocrAttempts == 1 && SwipeZone.isSet(applicationContext)) {
-            slideGesture(0f, 0f, 0f, "OCR+ZONE try 1", dur)
-        } else if (slider != null) {
+        val slider = ScreenOcrScanner.estimateSlider(res.bitmap, acceptLine.box)
+        val ok = if (slider != null) {
             val h = slider.height().toFloat()
+            // Thumb ke THEEK upar se pakdo (pixel se mila)
             val thumbX = ScreenOcrScanner.findThumbCenterX(res.bitmap, slider)?.toFloat()
                 ?: (slider.left + h * 0.95f)
             slideGesture(
                 thumbX,
                 slider.exactCenterY(),
                 slider.right - h * 0.10f,
-                "SLIDER pixel se, try $ocrAttempts",
-                dur
+                "SLIDER pixel se, try $ocrAttempts"
             )
         } else {
+            // Slider ka rang nahi pakda: "Accept in Ns" text ki height par hi swipe (wahi pill ka beech hai)
             slideGesture(
                 bmpW * 0.23f,
                 acceptLine.box.exactCenterY(),
                 bmpW * 0.90f,
-                "TEXT-y se, try $ocrAttempts",
-                dur
+                "TEXT-y se, try $ocrAttempts"
             )
         }
         lastActionAt = System.currentTimeMillis()
         if (ok) {
             setStatus("ORDER UTHA RAHA")
-            if (DebugOverlay.ENABLED) showDebugToast("SwiftGate: OCR turbo swipe")
+            showDebugToast("Bipin Clicker: OCR se order uthane ka action")
         }
     }
 
@@ -739,15 +617,12 @@ class OrderWatcherService : AccessibilityService() {
      * text node milta hai. Slider text ke theek peeche, screen ke beech me hota hai: isliye text ki
      * height (y) par thumb se right tak slide karo.
      */
-    private fun geometricSlideFromNode(
-        node: AccessibilityNodeInfo,
-        durationOverrideMs: Long = SWIPE_MS
-    ): Boolean {
+    private fun geometricSlideFromNode(node: AccessibilityNodeInfo): Boolean {
         val r = Rect()
         try { node.getBoundsInScreen(r) } catch (_: Exception) { return false }
         if (r.width() <= 0 || r.height() <= 0 || r.height() > 300) return false
         val w = resources.displayMetrics.widthPixels.toFloat()
-        return slideGesture(w * 0.229f, r.exactCenterY(), w * 0.90f, "GEOM text=$r", durationOverrideMs)
+        return slideGesture(w * 0.229f, r.exactCenterY(), w * 0.90f, "GEOM text=$r")
     }
 
     private fun tapNodeCenter(node: AccessibilityNodeInfo): Boolean {
@@ -760,17 +635,24 @@ class OrderWatcherService : AccessibilityService() {
 
         val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 28L))
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
             .build()
         val ok = try { dispatchGesture(gesture, null, null) } catch (_: Exception) { false }
         reportDebug("TAP fallback at ${r.centerX()},${r.centerY()} dispatched=$ok")
         return ok
     }
 
-    private fun swipeAcceptControl(
-        node: AccessibilityNodeInfo,
-        durationOverrideMs: Long = SWIPE_MS
-    ): Boolean {
+    /**
+     * FIX (naya): TWO-STROKE press-hold-drag.
+     *
+     * Pehle ek chhota stroke: thumb par touch-down + 8px hold (250ms).
+     * Phir continueStroke: wahin se poore right tak drag (300ms).
+     *
+     * Kyun? Porter ka slider ACTION_DOWN ke turant baad hi tez move ko
+     * "fling/invalid" maan kar discard kar deta hai. Real ungli pehle dabti
+     * hai phir rukti hai phir khisakti hai - wahi pattern copy kiya hai.
+     */
+    private fun swipeAcceptControl(node: AccessibilityNodeInfo): Boolean {
         val target = findSliderLikeAncestor(node) ?: return false
         val bounds = Rect()
 
@@ -782,6 +664,9 @@ class OrderWatcherService : AccessibilityService() {
 
         if (bounds.width() < 200 || bounds.height() < 40) return false
 
+        // The screenshot's control is a wide horizontal slider. Prefer the
+        // actual thumb child; otherwise use a point about one thumb-radius
+        // inside the left edge. Do NOT start at the text label.
         val thumb = findThumbChild(target, bounds)
         val thumbCenterX = thumb?.centerX()?.toFloat()
             ?: (bounds.left + bounds.height() * 0.98f)
@@ -801,7 +686,7 @@ class OrderWatcherService : AccessibilityService() {
         if (endX <= startX + 80f) return false
 
         val info = "bounds=$bounds\nstart=${startX.toInt()},${y.toInt()}\nend=${endX.toInt()}\nthumb=${thumb?.let { "${it.centerX()},${it.centerY()}" } ?: "fallback"}"
-        return slideGesture(startX, y, endX, info, durationOverrideMs)
+        return slideGesture(startX, y, endX, info)
     }
 
     private var swipeStyle = 0
@@ -813,17 +698,11 @@ class OrderWatcherService : AccessibilityService() {
      * koshish me alag STYLE aazmata hai (A, B, C, D), jo chal jaye. Debug box me har koshish
      * ka natija "[last: styleX ...]" me dikhta hai.
      */
-    private fun slideGesture(
-        startX0: Float,
-        y0: Float,
-        endX0: Float,
-        info0: String,
-        durationOverrideMs: Long = SWIPE_MS
-    ): Boolean {
+    private fun slideGesture(startX0: Float, y0: Float, endX0: Float, info0: String): Boolean {
         if (!LicenseManager.isActive(applicationContext)) return false
         if (SwipeZone.isEditing()) {
             SwipeZone.closeEditor()
-            handler.postDelayed({ slideGesture(startX0, y0, endX0, info0, durationOverrideMs) }, 80L)
+            handler.postDelayed({ slideGesture(startX0, y0, endX0, info0) }, 120L)
             return true
         }
 
@@ -831,6 +710,9 @@ class OrderWatcherService : AccessibilityService() {
         val maxX = dm.widthPixels.toFloat() - 1f
         val maxY = dm.heightPixels.toFloat() - 1f
 
+        // FIX: pehle yahan sahi jagah (OCR/pixel se mili) pheink kar hamesha purani manual green
+        // line use hoti thi - wo slider se door thi, isliye swipe slider par girta hi nahi tha.
+        // Ab pehle live mili jagah use hoti hai; green zone sirf backup hai.
         val auto = y0 > 0f && endX0 > startX0 + 150f
         val startX: Float
         val endX: Float
@@ -858,8 +740,7 @@ class OrderWatcherService : AccessibilityService() {
             return false
         }
 
-        val t0 = SystemClock.uptimeMillis()
-        if (t0 < slideInFlightUntil) return false
+        if (SystemClock.uptimeMillis() < slideInFlightUntil) return false
 
         val canGesture = try {
             ((serviceInfo?.capabilities ?: 0) and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
@@ -871,30 +752,33 @@ class OrderWatcherService : AccessibilityService() {
             return false
         }
 
-        val durMs = durationOverrideMs.coerceIn(22L, 120L)
+        // FIX (video se): thumb finger ke saath thoda chalta tha par finger turant chhoot jata tha,
+        // isliye slider wapas laut jata tha. Ab insaan jaisa swipe: pehle thumb PAKDO (ruko),
+        // phir KHEECHO, phir END par thoda RUKO, tab chhodo. Har koshish me alag style.
         val style = swipeTry++ % 4
         val tag = "$src ${'A' + style}"
-        val overshoot = (endX + 28f).coerceAtMost(maxX)
-        val info = "$tag ${durMs}ms start=${startX.toInt()},${y.toInt()} end=${endX.toInt()} | $info0"
-        slideInFlightUntil = t0 + durMs + 40L
+        val overshoot = (endX + 26f).coerceAtMost(maxX)
+        val info = "$tag start=${startX.toInt()},${y.toInt()} end=${endX.toInt()} | $info0"
+        val t0 = SystemClock.uptimeMillis()
+        slideInFlightUntil = t0 + 4000L
 
         fun fin(ok: Boolean, what: String) {
-            slideInFlightUntil = SystemClock.uptimeMillis() + 15L
+            // thumb ko wapas laut'ne ka time do, phir agli koshish
+            slideInFlightUntil = SystemClock.uptimeMillis() + 450L
             lastSwipeResult = "$tag ${if (ok) "DONE" else what}"
             reportDebug("SWIPE $lastSwipeResult ${SystemClock.uptimeMillis() - t0}ms\n$info")
             if (ok) SoundPlayer.playOrderSound(applicationContext)
         }
 
-        val path = Path().apply {
-            moveTo(startX, y)
-            lineTo(startX + (overshoot - startX) * 0.15f, y)
-            lineTo(overshoot, y)
-        }
-
-        val dispatched = try {
-            dispatchGesture(
+        fun single(durationMs: Long, toX: Float): Boolean {
+            val path = Path().apply {
+                moveTo(startX, y)
+                lineTo(startX + 8f, y)
+                lineTo(toX, y)
+            }
+            return dispatchGesture(
                 GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0L, durMs))
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
                     .build(),
                 object : GestureResultCallback() {
                     override fun onCompleted(g: GestureDescription?) { fin(true, "") }
@@ -902,16 +786,60 @@ class OrderWatcherService : AccessibilityService() {
                 },
                 null
             )
+        }
+
+        fun chain(holdMs: Long, dragMs: Long, endHoldMs: Long, toX: Float): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return single(holdMs + dragMs + endHoldMs, toX)
+            val holdPath = Path().apply { moveTo(startX, y); lineTo(startX + 1f, y) }
+            val s1 = GestureDescription.StrokeDescription(holdPath, 0L, holdMs, true)
+            return dispatchGesture(
+                GestureDescription.Builder().addStroke(s1).build(),
+                object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) {
+                        val dragPath = Path().apply { moveTo(startX + 1f, y); lineTo(toX, y) }
+                        val s2 = s1.continueStroke(dragPath, 0L, dragMs, true)
+                        val ok2 = try {
+                            dispatchGesture(
+                                GestureDescription.Builder().addStroke(s2).build(),
+                                object : GestureResultCallback() {
+                                    override fun onCompleted(g2: GestureDescription?) {
+                                        val endPath = Path().apply { moveTo(toX, y); lineTo(toX - 1f, y) }
+                                        val s3 = s2.continueStroke(endPath, 0L, endHoldMs, false)
+                                        val ok3 = try {
+                                            dispatchGesture(
+                                                GestureDescription.Builder().addStroke(s3).build(),
+                                                object : GestureResultCallback() {
+                                                    override fun onCompleted(g3: GestureDescription?) { fin(true, "") }
+                                                    override fun onCancelled(g3: GestureDescription?) { fin(false, "CANCELLED(end)") }
+                                                },
+                                                null
+                                            )
+                                        } catch (e: Exception) { false }
+                                        if (!ok3) fin(false, "REJECTED(end)")
+                                    }
+                                    override fun onCancelled(g2: GestureDescription?) { fin(false, "CANCELLED(drag)") }
+                                },
+                                null
+                            )
+                        } catch (e: Exception) { false }
+                        if (!ok2) fin(false, "REJECTED(drag)")
+                    }
+                    override fun onCancelled(g: GestureDescription?) { fin(false, "CANCELLED(hold)") }
+                },
+                null
+            )
+        }
+
+        val dispatched = try {
+            single(SWIPE_MS, endX)
         } catch (e: Exception) {
             reportDebug("SWIPE exception: ${e.message}")
             false
         }
 
         if (dispatched) {
-            handler.post {
-                reportDebug("SWIPE $tag TRYING\n$info")
-                SwipeIndicator.animateSwipe(durMs)
-            }
+            reportDebug("SWIPE $tag TRYING\n$info")
+            SwipeIndicator.animateSwipe(SWIPE_MS)
         } else {
             slideInFlightUntil = 0L
             lastSwipeResult = "$tag REJECTED"
@@ -987,63 +915,18 @@ class OrderWatcherService : AccessibilityService() {
         return best
     }
 
-    private fun appendNodePart(sb: StringBuilder, text: CharSequence?) {
-        if (text == null) return
-        val s = text.toString()
-        if (s.isBlank()) return
-        if (sb.isNotEmpty()) sb.append(" | ")
-        sb.append(s)
-    }
-
-    private fun collectFast(
-        node: AccessibilityNodeInfo?,
-        out: StringBuilder,
-        acceptOut: Array<AccessibilityNodeInfo?>
-    ) {
+    private fun collectText(node: AccessibilityNodeInfo?, out: MutableList<String>) {
         if (node == null) return
 
-        val t = node.text?.toString()?.takeIf { it.isNotBlank() }
-        val d = node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
-        val h = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            node.hintText?.toString()?.takeIf { it.isNotBlank() }
-        } else null
-        val p = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            node.paneTitle?.toString()?.takeIf { it.isNotBlank() }
-        } else null
-
-        if (t != null) appendNodePart(out, t)
-        if (d != null) appendNodePart(out, d)
-        if (h != null) appendNodePart(out, h)
-        if (p != null) appendNodePart(out, p)
-
-        if (acceptOut[0] == null && (t != null || d != null || h != null)) {
-            val raw = (t ?: d ?: h ?: "").lowercase()
-            if (fastContainsAccept(raw) && !raw.contains("pickup") && !raw.contains("drop")) {
-                val compact = NON_ALNUM_RE.replace(raw, "")
-                if (ACCEPT_COMPACT.any { compact.contains(it) } || ACCEPT_WORDS.any { raw.contains(it) }) {
-                    acceptOut[0] = node
-                }
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-            val child = try { node.getChild(i) } catch (_: Exception) { null }
-            if (child != null) collectFast(child, out, acceptOut)
-        }
-    }
-
-    private fun collectText(node: AccessibilityNodeInfo?, out: StringBuilder) {
-        if (node == null) return
-
-        appendNodePart(out, node.text)
-        appendNodePart(out, node.contentDescription)
+        node.text?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
+        node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            appendNodePart(out, node.hintText)
+            node.hintText?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            appendNodePart(out, node.paneTitle)
+            node.paneTitle?.toString()?.takeIf { it.isNotBlank() }?.let(out::add)
         }
 
         for (i in 0 until node.childCount) {
@@ -1053,7 +936,8 @@ class OrderWatcherService : AccessibilityService() {
     }
 
     private fun reportDebug(message: String) {
-        if (!DebugOverlay.ENABLED) return
+        // FIX: har 100ms par overlay + notification update karne se system throttle karta tha
+        // aur main thread bhari ho jata tha.
         val now = SystemClock.uptimeMillis()
         if (message == lastReportMsg && now - lastReportAt < 1500L) return
         if (message.startsWith("Scan (") && now - lastReportAt < 1000L) return
@@ -1069,10 +953,6 @@ class OrderWatcherService : AccessibilityService() {
             .edit()
             .putString("status", status)
             .apply()
-        if (!DebugOverlay.ENABLED && status != lastNotifiedStatus) {
-            lastNotifiedStatus = status
-            updateStatusNotification("Status: $status")
-        }
     }
 
     private fun showDebugToast(message: String) {
@@ -1109,8 +989,9 @@ class OrderWatcherService : AccessibilityService() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_service_on)
-            .setContentTitle("BIPIN Clicker")
+            .setContentTitle("BIPIN Clicker DEBUG")
             .setContentText(message.take(60))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message.take(500)))
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
