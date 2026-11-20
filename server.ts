@@ -80,10 +80,9 @@ interface StoreState {
 }
 
 const DEFAULT_PLANS: SubscriptionPlan[] = [
-  { id: 'plan_1d', name: '1 Day Pass', durationHours: 24, priceInr: 29 },
-  { id: 'plan_7d', name: '7 Days Pass', durationHours: 24 * 7, priceInr: 149, badge: 'Popular' },
-  { id: 'plan_30d', name: '30 Days Monthly', durationHours: 24 * 30, priceInr: 399, badge: 'Best Value' },
-  { id: 'plan_life', name: 'Lifetime Unlimited', durationHours: 0, priceInr: 999 },
+  { id: 'plan_1d', name: '1 Day Pass', durationHours: 24, priceInr: 30 },
+  { id: 'plan_7d', name: '7 Days Pass', durationHours: 24 * 7, priceInr: 180, badge: 'Popular' },
+  { id: 'plan_15d', name: '15 Days Pass', durationHours: 24 * 15, priceInr: 350, badge: 'Best Value' },
 ];
 
 const DEFAULT_BUSINESS_NAME = 'BIPIN KUMAR YADAV';
@@ -1037,15 +1036,17 @@ async function startServer(): Promise<void> {
 
     const envPass = (process.env.ADMIN_PASSCODE || '').trim();
     if (!envPass && !store.adminPasswordHash) {
-      store.adminPasswordHash = hashPasswordScrypt(passcode);
-    } else {
-      const valid = envPass
-        ? safeEqualText(passcode, envPass)
-        : Boolean(store.adminPasswordHash && verifyPasswordScrypt(passcode, store.adminPasswordHash));
-      if (!valid) {
-        res.status(401).json({ error: 'Galat Owner Passcode' });
-        return;
-      }
+      res.status(403).json({
+        error: 'Suraksha ke liye pehle Website ke Owner Business Panel me jakar apna Admin Password set karein',
+      });
+      return;
+    }
+    const valid = envPass
+      ? safeEqualText(passcode, envPass)
+      : Boolean(store.adminPasswordHash && verifyPasswordScrypt(passcode, store.adminPasswordHash));
+    if (!valid) {
+      res.status(401).json({ error: 'Galat Owner Passcode — ye sirf Owner ke liye hai' });
+      return;
     }
 
     const envSecret = (process.env.MERCHANT_WEBHOOK_SECRET || '').trim();

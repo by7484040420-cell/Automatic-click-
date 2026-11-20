@@ -487,7 +487,7 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
         )}
 
         {/* Subscription Plans Grid */}
-        <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
           {(plansInfo?.plans || []).map((plan) => {
             const isSelected = selectedPlanId === plan.id && activeOrder?.plan.id === plan.id;
             return (

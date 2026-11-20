@@ -1,0 +1,60 @@
+{
+  "config": {
+    "businessName": "BIPIN KUMAR YADAV",
+    "businessUpiVpa": "paytmqr5i4hko@ptys"
+  },
+  "plans": [
+    {
+      "id": "plan_1d",
+      "name": "1 Day Pass",
+      "durationHours": 24,
+      "priceInr": 30
+    },
+    {
+      "id": "plan_7d",
+      "name": "7 Days Pass",
+      "durationHours": 168,
+      "priceInr": 180,
+      "badge": "Popular"
+    },
+    {
+      "id": "plan_15d",
+      "name": "15 Days Pass",
+      "durationHours": 360,
+      "priceInr": 350,
+      "badge": "Best Value"
+    }
+  ],
+  "orders": {
+    "SG4FAB825261": {
+      "orderId": "SG4FAB825261",
+      "deviceId": "7BE5DCB4DD26",
+      "planId": "plan_1d",
+      "planName": "1 Day Pass",
+      "durationHours": 24,
+      "amountInr": 29,
+      "amountPaise": 2900,
+      "upiUri": "upi://pay?pa=paytmqr5i4hko%40ptys&pn=BIPIN+KUMAR+YADAV&am=29.00&cu=INR&tr=SG4FAB825261&tn=SwiftGate+1+Day+Pass+7BE5DCB4DD26",
+      "mode": "business_upi",
+      "status": "PENDING",
+      "createdAt": 1795201126021,
+      "expiresAt": 1795202026021
+    },
+    "SG253F2AC3ED": {
+      "orderId": "SG253F2AC3ED",
+      "deviceId": "7BE5DCB4DD26",
+      "planId": "plan_1d",
+      "planName": "1 Day Pass",
+      "durationHours": 24,
+      "amountInr": 29.01,
+      "amountPaise": 2901,
+      "upiUri": "upi://pay?pa=paytmqr5i4hko%40ptys&pn=BIPIN+KUMAR+YADAV&am=29.01&cu=INR&tr=SG253F2AC3ED&tn=SwiftGate+1+Day+Pass+7BE5DCB4DD26",
+      "mode": "business_upi",
+      "status": "EXPIRED",
+      "createdAt": 1795201134559,
+      "expiresAt": 1795202034559
+    }
+  },
+  "licenses": {},
+  "usedUtrs": {}
+}
