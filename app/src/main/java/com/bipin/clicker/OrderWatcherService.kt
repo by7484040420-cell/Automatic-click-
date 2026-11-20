@@ -197,7 +197,7 @@ class OrderWatcherService : AccessibilityService() {
                         lastSignature = signature
                         lastActionAt = now
                         setStatus("ORDER UTHA RAHA")
-                        showDebugToast("Bipin Clicker: Order uthane ka action")
+                        showDebugToast("SwiftGate: Order uthane ka action")
                         reportDebug("ORDER UTHA RAHA - live Accept control par gesture bheja")
                         startVerifyRetry()
                     } else {
@@ -633,7 +633,7 @@ class OrderWatcherService : AccessibilityService() {
         lastActionAt = System.currentTimeMillis()
         if (ok) {
             setStatus("ORDER UTHA RAHA")
-            showDebugToast("Bipin Clicker: OCR se order uthane ka action")
+            showDebugToast("SwiftGate: OCR se order uthane ka action")
         }
     }
 
@@ -1058,7 +1058,7 @@ class OrderWatcherService : AccessibilityService() {
             nm.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "BIPIN Clicker Status",
+                    "SwiftGate Status",
                     NotificationManager.IMPORTANCE_LOW
                 )
             )
@@ -1066,7 +1066,7 @@ class OrderWatcherService : AccessibilityService() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_service_on)
-            .setContentTitle("BIPIN Clicker: ON")
+            .setContentTitle("SwiftGate: ON")
             .setContentText("Live order reading is active")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -1079,7 +1079,7 @@ class OrderWatcherService : AccessibilityService() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_service_on)
-            .setContentTitle("BIPIN Clicker DEBUG")
+            .setContentTitle("SwiftGate DEBUG")
             .setContentText(message.take(60))
             .setStyle(NotificationCompat.BigTextStyle().bigText(message.take(500)))
             .setOngoing(true)

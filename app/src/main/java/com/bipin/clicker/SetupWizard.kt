@@ -68,7 +68,7 @@ object SetupWizard {
 
     private fun open(c: Context, step: Step): Boolean = when (step) {
         Step.ACCESSIBILITY -> {
-            toast(c, "1) 'BIPIN Clicker' dhoondo aur ON karo.\nAgar grey/band ho: App info -> upar 3 dot -> Allow restricted settings")
+            toast(c, "1) 'SwiftGate' dhoondo aur ON karo.\nAgar grey/band ho: App info -> upar 3 dot -> Allow restricted settings")
             launch(c, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 

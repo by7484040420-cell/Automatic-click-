@@ -87,12 +87,12 @@ class ScreenWatcherService : Service() {
         val channelId = "bipin_clicker_watch"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(channelId, "BIPIN Screen Watcher", NotificationManager.IMPORTANCE_MIN)
+                NotificationChannel(channelId, "SwiftGate Screen Watcher", NotificationManager.IMPORTANCE_MIN)
             )
         }
         val n: Notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_service_on)
-            .setContentTitle("BIPIN Clicker: screen watcher ON")
+            .setContentTitle("SwiftGate: screen watcher ON")
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
         ServiceCompat.startForeground(this, 778, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)

@@ -105,7 +105,7 @@ class FloatingBubbleService : Service() {
             longPressTriggered = true
             Toast.makeText(
                 this,
-                "BipinClicker bubble band kiya",
+                "SwiftGate bubble band kiya",
                 Toast.LENGTH_SHORT
             ).show()
             stopSelf()

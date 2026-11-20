@@ -45,7 +45,7 @@ export const PermissionSetupView: React.FC<PermissionSetupViewProps> = ({
     }> = [
       {
         key: 'accessibility',
-        msg: "1) 'BIPIN Clicker' dhoondo aur ON karo (Accessibility Service)",
+        msg: "1) 'SwiftGate' dhoondo aur ON karo (Accessibility Service)",
       },
       {
         key: 'overlay',
