@@ -4,7 +4,6 @@ import path from 'node:path';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import QRCode from 'qrcode';
-import { createServer as createViteServer } from 'vite';
 
 const PORT = Number(process.env.PORT || 3000);
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -1106,6 +1105,7 @@ async function startServer(): Promise<void> {
   // ---------- Frontend Hosting (Vite dev or built dist) ----------
 
   if (!IS_PROD) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
