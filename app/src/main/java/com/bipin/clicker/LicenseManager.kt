@@ -221,16 +221,48 @@ object LicenseManager {
                 append("\n").append(extraInfo)
             }
         }
-        val waUrl = "https://wa.me/$OWNER_WHATSAPP_NUMBER?text=${Uri.encode(msg)}"
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(waUrl)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val encodedMsg = Uri.encode(msg)
+        val deepUri = Uri.parse("whatsapp://send?phone=$OWNER_WHATSAPP_NUMBER&text=$encodedMsg")
+        val webUri = Uri.parse("https://wa.me/$OWNER_WHATSAPP_NUMBER?text=$encodedMsg")
+
+        // Simple WhatsApp aur Business WhatsApp dono me seedhe chat kholne ki koshish (bina browser)
+        val candidates = listOf(
+            Intent(Intent.ACTION_VIEW, deepUri).apply { setPackage("com.whatsapp") },
+            Intent(Intent.ACTION_VIEW, deepUri).apply { setPackage("com.whatsapp.w4b") },
+            Intent(Intent.ACTION_VIEW, deepUri),
+            Intent(Intent.ACTION_VIEW, webUri),
+            Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$OWNER_WHATSAPP_DISPLAY")).apply {
+                putExtra("sms_body", msg)
+            }
+        )
+
+        var opened = false
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                if (intent.resolveActivity(ctx.packageManager) != null) {
+                    ctx.startActivity(intent)
+                    opened = true
+                    break
+                }
+            } catch (_: Exception) {
+            }
         }
-        try {
-            ctx.startActivity(intent)
-        } catch (_: Exception) {
+        if (!opened) {
+            // Last direct attempt without resolveActivity check
+            for (intent in candidates) {
+                try {
+                    ctx.startActivity(intent)
+                    opened = true
+                    break
+                } catch (_: Exception) {
+                }
+            }
+        }
+        if (!opened) {
             Toast.makeText(
                 ctx,
-                "WhatsApp par $OWNER_WHATSAPP_DISPLAY ko message karein (ID copy ho gayi hai)",
+                "WhatsApp ya SMS se $OWNER_WHATSAPP_DISPLAY par message karein (ID copy ho gayi hai)",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -401,9 +433,10 @@ object LicenseManager {
             val url = "${getServerUrl(app)}/api/admin/owner-device/connect"
             val payload = JSONObject().put("passcode", passcode.trim())
             val res = httpPostJson(url, payload.toString())
-            val out = if (res.code == 200 && !res.body.isNullOrBlank()) {
+            val bodyStr = res.body?.trim().orEmpty()
+            val out = if (res.code == 200 && bodyStr.startsWith("{")) {
                 try {
-                    val obj = JSONObject(res.body)
+                    val obj = JSONObject(bodyStr)
                     OwnerConnectResult(
                         ok = obj.optBoolean("ok", false),
                         webhookSecret = obj.optString("webhookSecret", ""),
@@ -412,9 +445,19 @@ object LicenseManager {
                 } catch (e: Exception) {
                     OwnerConnectResult(false, error = "Parse error: ${e.message}")
                 }
+            } else if (res.code == 404 && !bodyStr.startsWith("{")) {
+                OwnerConnectResult(
+                    false,
+                    error = "Server abhi Publish/Deploy nahi hua (404). AI Studio me upar Share/Deploy karein ya sahi Server URL daalein."
+                )
+            } else if (res.code in 300..399 || (res.code == 200 && bodyStr.startsWith("<"))) {
+                OwnerConnectResult(
+                    false,
+                    error = "Private dev link nahi chalega — Deploy kiya hua public Server URL daalein."
+                )
             } else {
                 val msg = try {
-                    JSONObject(res.body ?: "{}").optString("error")
+                    if (bodyStr.startsWith("{")) JSONObject(bodyStr).optString("error") else ""
                 } catch (_: Exception) { "" }
                 OwnerConnectResult(false, error = msg.ifBlank { res.err ?: "Connect fail (${res.code})" })
             }
@@ -469,11 +512,12 @@ object LicenseManager {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
+            conn.instanceFollowRedirects = false
             conn.connectTimeout = 7000
             conn.readTimeout = 7000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("User-Agent", "BipinClicker")
+            conn.setRequestProperty("User-Agent", "SwiftGate")
             OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(jsonBody) }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream

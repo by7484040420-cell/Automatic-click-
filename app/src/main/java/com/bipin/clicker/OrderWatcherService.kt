@@ -16,6 +16,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 
@@ -120,12 +121,33 @@ class OrderWatcherService : AccessibilityService() {
         }
     }
 
+    private fun isIgnoredPackage(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        if (pkg == packageName) return true
+        val lp = pkg.lowercase()
+        return lp == "com.android.systemui" ||
+            lp == "com.oplus.screenrecorder" ||
+            lp.contains("inputmethod") ||
+            lp.contains("keyboard") ||
+            lp.contains("gboard") ||
+            lp.contains("swiftkey") ||
+            lp.contains("honeyboard")
+    }
+
+    private fun isOwnAppInForeground(): Boolean {
+        if (OwnerPaytmConfig.setupDialogOpen) return true
+        val activePkg = try { rootInActiveWindow?.packageName?.toString() } catch (_: Exception) { null }
+        return activePkg == packageName
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (AreaPrefs.isPaused(applicationContext)) return
         if (!LicenseManager.isActive(applicationContext)) return
-        // FIX: apne hi overlay/notification ke events se scan loop na bane
-        if (event.packageName?.toString() == packageName) return
+        if (OwnerPaytmConfig.setupDialogOpen) return
+        // Apne app ya keyboard typing events par scan mat chalao (10s lag bachane ke liye)
+        if (isIgnoredPackage(event.packageName?.toString())) return
+        if (isOwnAppInForeground()) return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
@@ -141,6 +163,7 @@ class OrderWatcherService : AccessibilityService() {
     private fun scanNow() {
         if (!LicenseManager.isActive(applicationContext)) return
         if (AreaPrefs.isPaused(applicationContext)) return
+        if (isOwnAppInForeground()) return
 
         // FIX: itne events aate hain ki main thread jam ho jata tha -> gesture late/cancel
         val tNow = SystemClock.uptimeMillis()
@@ -152,9 +175,8 @@ class OrderWatcherService : AccessibilityService() {
 
         for (root in roots) {
             try {
-                if (root.packageName == packageName) continue
                 val pk = root.packageName?.toString()
-                if (pk == "com.oplus.screenrecorder" || pk == "com.android.systemui") continue
+                if (isIgnoredPackage(pk)) continue
 
                 val texts = mutableListOf<String>()
                 collectText(root, texts)
@@ -346,10 +368,15 @@ class OrderWatcherService : AccessibilityService() {
     private fun currentRoots(): List<AccessibilityNodeInfo> {
         val roots = LinkedHashSet<AccessibilityNodeInfo>()
         // Active / top-most overlay popup windows ko hamesha sabse pehle scan karo
-        rootInActiveWindow?.let { roots.add(it) }
+        rootInActiveWindow?.let {
+            if (!isIgnoredPackage(it.packageName?.toString())) roots.add(it)
+        }
         try {
             windows?.asReversed()?.forEach { window ->
-                window.root?.let { roots.add(it) }
+                if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return@forEach
+                window.root?.let { root ->
+                    if (!isIgnoredPackage(root.packageName?.toString())) roots.add(root)
+                }
             }
         } catch (_: Exception) {
         }
@@ -485,6 +512,7 @@ class OrderWatcherService : AccessibilityService() {
             return
         }
         if (AreaPrefs.isPaused(applicationContext)) return
+        if (isOwnAppInForeground()) return
         // Action ke turant baad screenshot mat lo (phone ka screenshot popup slider ke upar aa jata hai)
         if (System.currentTimeMillis() - lastActionAt < 600L) return
         if (SystemClock.uptimeMillis() < slideInFlightUntil) return

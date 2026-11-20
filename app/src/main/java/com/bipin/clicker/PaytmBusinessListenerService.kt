@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -31,6 +32,10 @@ object OwnerPaytmConfig {
     private const val K_SECRET = "webhook_secret"
     private const val K_ENABLED = "forwarder_enabled"
     private const val K_LAST_STATUS = "last_forward_status"
+
+    @Volatile
+    var setupDialogOpen: Boolean = false
+        private set
 
     fun getSecret(ctx: Context): String =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -73,6 +78,7 @@ object OwnerPaytmConfig {
     }
 
     fun showSetupDialog(activity: AppCompatActivity) {
+        setupDialogOpen = true
         val d = activity.resources.displayMetrics.density
         val pad = (16 * d).toInt()
         val box = LinearLayout(activity).apply {
@@ -94,9 +100,21 @@ object OwnerPaytmConfig {
 
         val etPasscode = EditText(activity).apply {
             hint = "Apna Owner Passcode daalein (6+ chars)"
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         box.addView(etPasscode)
+
+        val etServerUrl = EditText(activity).apply {
+            hint = "Server URL (Deploy hone par wahi rahega)"
+            textSize = 11f
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setText(LicenseManager.getServerUrl(activity))
+        }
+        box.addView(etServerUrl)
 
         val btnAutoConnect = Button(activity).apply {
             text = "1-Tap Auto-Connect Paytm"
@@ -124,14 +142,24 @@ object OwnerPaytmConfig {
                 Toast.makeText(activity, "Owner Auto-Approve off kar diya gaya", Toast.LENGTH_SHORT).show()
             }
             .setPositiveButton("Done") { _, _ ->
+                val urlInput = etServerUrl.text.toString().trim()
+                if (urlInput.startsWith("https://") || urlInput.startsWith("http://")) {
+                    LicenseManager.setServerUrl(activity, urlInput)
+                }
                 val existing = getSecret(activity)
                 if (existing.isNotEmpty()) {
                     saveConfig(activity, existing, cbEnabled.isChecked)
                 }
             }
-            .show()
+            .create()
+        dialog.setOnDismissListener { setupDialogOpen = false }
+        dialog.show()
 
         btnAutoConnect.setOnClickListener {
+            val urlInput = etServerUrl.text.toString().trim()
+            if (urlInput.startsWith("https://") || urlInput.startsWith("http://")) {
+                LicenseManager.setServerUrl(activity, urlInput)
+            }
             val pass = etPasscode.text.toString().trim()
             if (pass.length < 6) {
                 Toast.makeText(activity, "Kam se kam 6 characters ka Owner Passcode daalein", Toast.LENGTH_SHORT).show()
