@@ -78,3 +78,89 @@ export type LiveWatcherStatus =
   | 'ORDER UTHA RAHA'
   | 'ORDER REJECTED'
   | 'ACTION RESULT UNKNOWN';
+
+export interface SubscriptionPlan {
+  id: string;
+  name: string;
+  durationHours: number;
+  priceInr: number;
+  badge?: string;
+}
+
+export interface PublicPlansInfo {
+  businessName: string;
+  businessUpiVpa: string;
+  businessUpiConfigured: boolean;
+  razorpayEnabled: boolean;
+  merchantWebhookConfigured: boolean;
+  instantAutoApproveReady: boolean;
+  plans: SubscriptionPlan[];
+  serverTimeMs: number;
+}
+
+export interface PaymentOrderData {
+  orderId: string;
+  deviceId: string;
+  plan: SubscriptionPlan;
+  amountInr: number;
+  mode: 'razorpay' | 'business_upi';
+  upiUri: string;
+  qrDataUrl: string;
+  razorpayQrImageUrl: string;
+  qrPngUrl: string;
+  status: 'PENDING' | 'PAID' | 'EXPIRED';
+  expiresAt: number;
+  serverTimeMs: number;
+}
+
+export interface PaymentPollStatus {
+  orderId: string;
+  deviceId: string;
+  planName: string;
+  amountInr: number;
+  status: 'PENDING' | 'PAID' | 'EXPIRED';
+  utr: string;
+  paidAt: number;
+  expiresAt: number;
+  licenseActive: boolean;
+  licenseExpiryMs: number;
+  isUnlimited: boolean;
+  serverTimeMs: number;
+}
+
+export interface AdminDashboardData {
+  config: {
+    businessName: string;
+    businessUpiVpa: string;
+  };
+  plans: SubscriptionPlan[];
+  orders: Array<{
+    orderId: string;
+    deviceId: string;
+    planName: string;
+    amountInr: number;
+    mode: string;
+    status: 'PENDING' | 'PAID' | 'EXPIRED';
+    utr?: string;
+    verifiedBy?: string;
+    createdAt: number;
+    paidAt?: number;
+  }>;
+  licenses: Array<{
+    deviceId: string;
+    expiryMs: number;
+    isUnlimited: boolean;
+    planName: string;
+    lastOrderId?: string;
+    updatedAt: number;
+  }>;
+  integrations: {
+    razorpayConfigured: boolean;
+    razorpayWebhookConfigured: boolean;
+    merchantWebhookEnvConfigured: boolean;
+    merchantWebhookKeySet: boolean;
+    githubTokenConfigured: boolean;
+  };
+  serverTimeMs: number;
+}
+

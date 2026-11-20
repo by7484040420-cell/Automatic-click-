@@ -92,6 +92,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.btnSwipeZone.setOnClickListener { openSwipeZoneEditor() }
+        binding.btnOwnerAutoApprove.setOnClickListener { OwnerPaytmConfig.showSetupDialog(this) }
 
         // First frame turant render hone ke baad Ads load karo (app open lag na ho)
         binding.root.postDelayed({ initAdsIfNeeded() }, 600L)

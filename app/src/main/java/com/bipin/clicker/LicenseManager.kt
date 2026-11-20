@@ -3,10 +3,14 @@
 package com.bipin.clicker
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import org.json.JSONObject
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -19,15 +23,15 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Approval (license) system.
  *
- * - Har phone ki ek Device ID hoti hai.
- * - Aap GitHub ki licenses.txt me us ID ke saamne EXPIRY (khatam hone ka time) likhte ho.
- * - App har 60 second me file check karta hai. ID/expiry mile aur time baaki ho to hi order uthata hai.
- * - Order uthane ke waqt koi internet nahi lagta: sirf phone me saved time dekha jata hai (bahut tez).
+ * 1) Instant Business UPI Server check (payment aate hi 1 second me approval milta hai)
+ * 2) GitHub licenses.txt fallback (purane/manual approvals ke liye)
+ * 3) Order uthane ke waqt koi internet nahi lagta: phone me signed saved time dekha jata hai (0ms).
  */
 object LicenseManager {
 
+    private const val DEFAULT_SERVER_URL = "https://ais-pre-6tn427fii6ngl2aha7z3rg-110169053172.asia-east1.run.app"
+
     // Aapka GitHub username: by7484040420-cell, repo: bipin-licenses, file: licenses.txt
-    // Pehle API se (turant fresh milta hai), na chale to raw link se.
     private const val API_URL =
         "https://api.github.com/repos/by7484040420-cell/bipin-licenses/contents/licenses.txt"
     const val LICENSE_URL =
@@ -38,6 +42,7 @@ object LicenseManager {
     private const val K_OFFSET = "offset"
     private const val K_SIG = "sig"
     private const val K_FALLBACK_ID = "fallback_id"
+    private const val K_SERVER_URL = "payment_server_url"
     private const val MARKER = "#BIPIN-LICENSES"
 
     @Volatile private var loaded = false
@@ -51,6 +56,65 @@ object LicenseManager {
     @Volatile
     var lastError: String = ""
         private set
+
+    data class UpiPlan(
+        val id: String,
+        val name: String,
+        val durationHours: Int,
+        val priceInr: Int,
+        val badge: String
+    )
+
+    data class UpiPlansResult(
+        val ok: Boolean,
+        val businessName: String,
+        val businessUpiVpa: String,
+        val plans: List<UpiPlan>,
+        val error: String = ""
+    )
+
+    data class UpiOrderResult(
+        val ok: Boolean,
+        val orderId: String = "",
+        val planName: String = "",
+        val amountInr: Double = 0.0,
+        val upiUri: String = "",
+        val qrImageUrl: String = "",
+        val qrPngUrl: String = "",
+        val error: String = ""
+    )
+
+    data class UpiPollResult(
+        val ok: Boolean,
+        val status: String = "PENDING",
+        val licenseActive: Boolean = false,
+        val error: String = ""
+    )
+
+    data class OwnerConnectResult(
+        val ok: Boolean,
+        val webhookSecret: String = "",
+        val businessUpiVpa: String = "",
+        val error: String = ""
+    )
+
+    fun getServerUrl(ctx: Context): String {
+        val raw = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(K_SERVER_URL, null)?.trim()?.trimEnd('/')
+        return if (!raw.isNullOrEmpty() && (raw.startsWith("https://") || raw.startsWith("http://"))) {
+            raw
+        } else {
+            DEFAULT_SERVER_URL
+        }
+    }
+
+    fun setServerUrl(ctx: Context, url: String) {
+        val clean = url.trim().trimEnd('/')
+        if (clean.startsWith("https://") || clean.startsWith("http://")) {
+            ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString(K_SERVER_URL, clean).apply()
+        }
+    }
 
     private fun ensureLoaded(ctx: Context) {
         if (loaded) return
@@ -139,7 +203,7 @@ object LicenseManager {
         }
     }
 
-    /** Background me GitHub file check karta hai. onDone main thread par chalta hai. */
+    /** Background me UPI server + GitHub file check karta hai. onDone main thread par chalta hai. */
     fun refreshAsync(ctx: Context, onDone: (() -> Unit)? = null) {
         val app = ctx.applicationContext
         ensureLoaded(app)
@@ -156,6 +220,168 @@ object LicenseManager {
             }
             if (onDone != null) Handler(Looper.getMainLooper()).post { onDone() }
         }.start()
+    }
+
+    // ---------- Instant Business UPI Payment APIs ----------
+
+    fun fetchPlansAsync(ctx: Context, onDone: (UpiPlansResult) -> Unit) {
+        val app = ctx.applicationContext
+        Thread {
+            val res = httpGet("${getServerUrl(app)}/api/public/plans?t=${System.currentTimeMillis()}", false, null)
+            val result = if (res.code == 200 && !res.body.isNullOrBlank()) {
+                try {
+                    val obj = JSONObject(res.body)
+                    val arr = obj.optJSONArray("plans")
+                    val list = mutableListOf<UpiPlan>()
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val p = arr.getJSONObject(i)
+                            list.add(
+                                UpiPlan(
+                                    id = p.getString("id"),
+                                    name = p.getString("name"),
+                                    durationHours = p.optInt("durationHours", 24),
+                                    priceInr = p.optInt("priceInr", 0),
+                                    badge = p.optString("badge", "")
+                                )
+                            )
+                        }
+                    }
+                    UpiPlansResult(
+                        ok = true,
+                        businessName = obj.optString("businessName", "SwiftGate"),
+                        businessUpiVpa = obj.optString("businessUpiVpa", ""),
+                        plans = list
+                    )
+                } catch (e: Exception) {
+                    UpiPlansResult(false, "", "", emptyList(), "Plans parse error: ${e.message}")
+                }
+            } else {
+                UpiPlansResult(false, "", "", emptyList(), res.err ?: "Server status ${res.code}")
+            }
+            Handler(Looper.getMainLooper()).post { onDone(result) }
+        }.start()
+    }
+
+    fun createUpiOrderAsync(ctx: Context, planId: String, onDone: (UpiOrderResult) -> Unit) {
+        val app = ctx.applicationContext
+        Thread {
+            val url = "${getServerUrl(app)}/api/payments/orders"
+            val payload = JSONObject().apply {
+                put("deviceId", deviceId(app))
+                put("planId", planId)
+            }
+            val res = httpPostJson(url, payload.toString())
+            val out = if (res.code == 200 && !res.body.isNullOrBlank()) {
+                try {
+                    val obj = JSONObject(res.body)
+                    val pObj = obj.optJSONObject("plan")
+                    val relPng = obj.optString("qrPngUrl", "")
+                    UpiOrderResult(
+                        ok = true,
+                        orderId = obj.getString("orderId"),
+                        planName = pObj?.optString("name") ?: "",
+                        amountInr = obj.optDouble("amountInr", 0.0),
+                        upiUri = obj.optString("upiUri", ""),
+                        qrImageUrl = obj.optString("razorpayQrImageUrl", ""),
+                        qrPngUrl = if (relPng.isNotBlank()) getServerUrl(app) + relPng else ""
+                    )
+                } catch (e: Exception) {
+                    UpiOrderResult(false, error = "Order response error: ${e.message}")
+                }
+            } else {
+                val msg = try {
+                    JSONObject(res.body ?: "{}").optString("error")
+                } catch (_: Exception) { "" }
+                UpiOrderResult(false, error = msg.ifBlank { res.err ?: "QR nahi bana (${res.code})" })
+            }
+            Handler(Looper.getMainLooper()).post { onDone(out) }
+        }.start()
+    }
+
+    fun pollUpiOrderAsync(ctx: Context, orderId: String, onDone: (UpiPollResult) -> Unit) {
+        val app = ctx.applicationContext
+        Thread {
+            val url = "${getServerUrl(app)}/api/payments/orders/$orderId?t=${System.currentTimeMillis()}"
+            val res = httpGet(url, false, null)
+            val out = if (res.code == 200 && !res.body.isNullOrBlank()) {
+                try {
+                    val obj = JSONObject(res.body)
+                    val status = obj.optString("status", "PENDING")
+                    val active = obj.optBoolean("licenseActive", false)
+                    val isUnlim = obj.optBoolean("isUnlimited", false)
+                    val exp = if (isUnlim) Long.MAX_VALUE else obj.optLong("licenseExpiryMs", 0L)
+                    val srvT = obj.optLong("serverTimeMs", System.currentTimeMillis())
+                    if ((status == "PAID" || active) && exp > 0L) {
+                        applyServerLicense(app, exp, srvT)
+                    }
+                    UpiPollResult(ok = true, status = status, licenseActive = active || status == "PAID")
+                } catch (e: Exception) {
+                    UpiPollResult(false, error = e.message ?: "Parse error")
+                }
+            } else {
+                UpiPollResult(false, error = res.err ?: "HTTP ${res.code}")
+            }
+            Handler(Looper.getMainLooper()).post { onDone(out) }
+        }.start()
+    }
+
+    fun loadQrBitmapAsync(url: String, onDone: (Bitmap?) -> Unit) {
+        Thread {
+            var bmp: Bitmap? = null
+            if (url.startsWith("https://") || url.startsWith("http://")) {
+                try {
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 7000
+                    conn.readTimeout = 7000
+                    if (conn.responseCode == 200) {
+                        conn.inputStream.use { bmp = BitmapFactory.decodeStream(it) }
+                    }
+                    conn.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+            Handler(Looper.getMainLooper()).post { onDone(bmp) }
+        }.start()
+    }
+
+    fun connectOwnerAutoApproveAsync(ctx: Context, passcode: String, onDone: (OwnerConnectResult) -> Unit) {
+        val app = ctx.applicationContext
+        Thread {
+            val url = "${getServerUrl(app)}/api/admin/owner-device/connect"
+            val payload = JSONObject().put("passcode", passcode.trim())
+            val res = httpPostJson(url, payload.toString())
+            val out = if (res.code == 200 && !res.body.isNullOrBlank()) {
+                try {
+                    val obj = JSONObject(res.body)
+                    OwnerConnectResult(
+                        ok = obj.optBoolean("ok", false),
+                        webhookSecret = obj.optString("webhookSecret", ""),
+                        businessUpiVpa = obj.optString("businessUpiVpa", "")
+                    )
+                } catch (e: Exception) {
+                    OwnerConnectResult(false, error = "Parse error: ${e.message}")
+                }
+            } else {
+                val msg = try {
+                    JSONObject(res.body ?: "{}").optString("error")
+                } catch (_: Exception) { "" }
+                OwnerConnectResult(false, error = msg.ifBlank { res.err ?: "Connect fail (${res.code})" })
+            }
+            Handler(Looper.getMainLooper()).post { onDone(out) }
+        }.start()
+    }
+
+    private fun applyServerLicense(app: Context, newExpiry: Long, srvMs: Long) {
+        val id = deviceId(app)
+        syncTime(srvMs)
+        expiryMs = newExpiry
+        loaded = true
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(K_EXPIRY, newExpiry)
+            .putLong(K_OFFSET, offset)
+            .putString(K_SIG, sign(newExpiry, offset, id))
+            .apply()
     }
 
     /** Approval screen par dikhne wali jaankari (kya check hua, kya mila). */
@@ -182,6 +408,27 @@ object LicenseManager {
             if (code != 200) return Res(code, null, conn.date, null, null)
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             return Res(200, body, conn.date, conn.getHeaderField("ETag"), null)
+        } catch (e: Exception) {
+            return Res(-1, null, 0L, null, e.javaClass.simpleName + ": " + (e.message ?: ""))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun httpPostJson(url: String, jsonBody: String): Res {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 7000
+            conn.readTimeout = 7000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("User-Agent", "BipinClicker")
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(jsonBody) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }
+            return Res(code, body, conn.date, null, null)
         } catch (e: Exception) {
             return Res(-1, null, 0L, null, e.javaClass.simpleName + ": " + (e.message ?: ""))
         } finally {
@@ -226,6 +473,26 @@ object LicenseManager {
         val id = deviceId(app)
         val info = StringBuilder()
 
+        // 0) Instant UPI payment server check (1-second approval after payment)
+        val upiSrv = httpGet("${getServerUrl(app)}/api/license/status?deviceId=$id&t=${System.currentTimeMillis()}", false, null)
+        if (upiSrv.code == 200 && !upiSrv.body.isNullOrBlank()) {
+            try {
+                val obj = JSONObject(upiSrv.body)
+                val active = obj.optBoolean("active", false)
+                val isUnlim = obj.optBoolean("isUnlimited", false)
+                val exp = if (isUnlim) Long.MAX_VALUE else obj.optLong("expiryMs", 0L)
+                val srvMs = obj.optLong("serverTimeMs", upiSrv.date)
+                if (active && exp > 0L) {
+                    applyServerLicense(app, exp, srvMs)
+                    lastError = ""
+                    debugInfo = "UPI Server OK | ID $id active (${fmtIst(exp)})"
+                    return
+                }
+                info.append("UPI OK(0) | ")
+            } catch (_: Exception) {
+            }
+        }
+
         // 1) GitHub API (turant fresh). ETag se "kuch nahi badla" (304) free hota hai.
         val api = httpGet(API_URL, true, etag)
         info.append("API ").append(if (api.code == -1) "err" else api.code.toString())
@@ -261,8 +528,6 @@ object LicenseManager {
                     if (raw.date > 0L) date = raw.date
                     fromApi = false
                 } else if (body == null) {
-                    // API chali hi nahi aur raw (purana ho sakta hai) me ID nahi: iska matlab pakka
-                    // "approval nahi" nahi hai. Pehle se mila approval waisa hi rehne do, hatao mat.
                     debugInfo = info.append(" | ID nahi mili (API chali nahi, purana approval waisa hi)").toString()
                     return
                 }
@@ -309,3 +574,4 @@ object LicenseManager {
         return 0L
     }
 }
+
