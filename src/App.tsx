@@ -151,13 +151,39 @@ export function App() {
     setPermissions(next);
   };
 
+  const navigateScreen = useCallback((screen: ScreenId) => {
+    setActiveScreen((prev) => {
+      if (prev !== screen && typeof window !== 'undefined' && window.history?.pushState) {
+        try {
+          window.history.pushState({ screen }, '', undefined);
+        } catch {
+          // ignore if restricted in iframe
+        }
+      }
+      return screen;
+    });
+  }, []);
+
+  useEffect(() => {
+    const onPopState = (e: PopStateEvent) => {
+      const next = (e.state as { screen?: ScreenId } | null)?.screen;
+      if (next) {
+        setActiveScreen(next);
+      } else {
+        setActiveScreen('home');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   const handleNavigate = (screen: ScreenId) => {
     if (!license.isActive && screen !== 'license') {
       showToast('Approval zaroori hai — pehle Device ID approve karwayein');
-      setActiveScreen('license');
+      navigateScreen('license');
       return;
     }
-    setActiveScreen(screen);
+    navigateScreen(screen);
   };
 
   const effectiveScreen: ScreenId = !license.isActive ? 'license' : activeScreen;

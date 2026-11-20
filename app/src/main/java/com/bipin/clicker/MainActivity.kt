@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var adBanner: AdView? = null
     private var adsInitialized = false
+    private var lastResumeSyncAt = 0L
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -47,7 +48,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Integrity.isTampered(this)) throw IllegalStateException("Corrupted package")
         // APPROVAL: bina approval ke app ki asli screen nahi khulegi
         if (!LicenseManager.isActive(this)) {
             startActivity(Intent(this, LicenseActivity::class.java))
@@ -56,6 +56,16 @@ class MainActivity : AppCompatActivity() {
         }
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Preload locations.json & regex caches in background taaki Area screen turant khule
+        Thread {
+            try {
+                LocationRepository.loadVerifiedCities(applicationContext)
+                LocationRepository.loadZonePins(applicationContext)
+                AreaPrefs.prewarm(applicationContext)
+            } catch (_: Exception) {
+            }
+        }.start()
 
         requestNotificationPermissionIfNeeded()
 
@@ -146,8 +156,12 @@ class MainActivity : AppCompatActivity() {
             finish()
             return
         }
-        LicenseManager.refreshAsync(this)
-        UpdateManager.checkAndPrompt(this)
+        val now = System.currentTimeMillis()
+        if (now - lastResumeSyncAt >= 60_000L) {
+            lastResumeSyncAt = now
+            LicenseManager.refreshAsync(this)
+            UpdateManager.checkAndPrompt(this)
+        }
         refreshStatus()
     }
 

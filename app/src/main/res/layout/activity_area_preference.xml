@@ -184,6 +184,15 @@
                     android:textSize="11sp" />
             </LinearLayout>
         </HorizontalScrollView>
+
+        <CheckBox
+            android:id="@+id/cbAllowMissingKm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Popup par KM na likha ho (jaise ₹41 wala card) to bhi Drop match par uthaye"
+            android:textColor="#E0E0E0"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <TextView

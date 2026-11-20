@@ -13,6 +13,7 @@ import {
   ALL_MARKER,
   addCustomLocalities,
   addCustomLocality,
+  getAllowPickupWhenKmMissing,
   getDropSelections,
   getMaxPickupKm,
   getPickupKeywords,
@@ -20,6 +21,7 @@ import {
   getRejectDropSelections,
   getRejectPickupSelections,
   removeCustomCity,
+  setAllowPickupWhenKmMissing,
   setDropSelections,
   setMaxPickupKm,
   setPickupKeywords,
@@ -94,6 +96,9 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     const saved = getMaxPickupKm();
     return saved > 0 ? String(saved) : '';
   });
+  const [allowMissingKm, setAllowMissingKm] = useState<boolean>(() =>
+    getAllowPickupWhenKmMissing()
+  );
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedCities, setExpandedCities] = useState<Record<string, boolean>>({});
   const [inlineInputs, setInlineInputs] = useState<Record<string, string>>({});
@@ -379,8 +384,9 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
       );
       setPickupKeywords(words);
     }
-    const parsedKm = Number(maxPickupKmText.trim());
+    const parsedKm = Number(maxPickupKmText.trim().replace(',', '.'));
     setMaxPickupKm(Number.isFinite(parsedKm) && parsedKm > 0 ? parsedKm : 0);
+    setAllowPickupWhenKmMissing(allowMissingKm);
 
     const dropAOut = serializeSelectionMap(workingDropA);
     setDropSelections(dropAOut);
@@ -398,7 +404,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   const pickupRCount = countMapEntries(workingPickupR);
   const dropACount = countMapEntries(workingDropA);
   const dropRCount = countMapEntries(workingDropR);
-  const parsedPreviewKm = Number(maxPickupKmText.trim());
+  const parsedPreviewKm = Number(maxPickupKmText.trim().replace(',', '.'));
   const activeMaxKm = Number.isFinite(parsedPreviewKm) && parsedPreviewKm > 0 ? parsedPreviewKm : 0;
 
   return (
@@ -523,8 +529,22 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
               ))}
             </div>
             <p className="mt-1.5 text-[11px] text-[#9E9E9E]">
-              Drop par chuni hui location (A) hona zaroori hai; Pickup me A-location YA {activeMaxKm > 0 ? `${activeMaxKm} km ke andar` : 'set km ke andar'} aaye to order uth jayega.
+              Drop par chuni hui location (A) hona zaroori hai; Pickup me A-location YA {activeMaxKm > 0 ? `${activeMaxKm} km ke andar` : 'set km ke andar'} aaye to order uth jayega (Drop ka km kabhi Pickup me nahi gina jayega).
             </p>
+            <label className="mt-2.5 flex min-h-[36px] cursor-pointer items-center gap-2.5 text-xs font-medium text-[#E0E0E0] select-none">
+              <input
+                type="checkbox"
+                checked={allowMissingKm}
+                onChange={(e) => setAllowMissingKm(e.target.checked)}
+                className="h-4 w-4 rounded accent-[#43A047]"
+              />
+              <span>Popup par KM na likha ho (jaise ₹41 wala card) to bhi Drop match par uthaye</span>
+            </label>
+            {activeMaxKm > 0 && dropACount === 0 && (
+              <p className="mt-1.5 text-xs font-semibold text-[#FFB74D]">
+                Dhyan dein: DROP tab me kam se kam 1 Drop area (A) select karein, warna koi order nahi uthega.
+              </p>
+            )}
           </div>
 
           <div>
@@ -756,14 +776,14 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                         >
                           <span className="truncate font-medium">{locality}</span>
 
-                          <div className="flex shrink-0 items-center gap-1">
+                          <div className="flex shrink-0 items-center gap-1.5">
                             <button
                               type="button"
                               disabled={isAllA && !ownA}
                               onClick={() => handleToggleLocalityMode(city, locality, 'A')}
                               aria-label={`${locality} Accept (A)`}
                               aria-pressed={activeA && !activeR}
-                              className={`flex h-8 w-8 items-center justify-center rounded border text-xs font-bold transition-colors ${
+                              className={`flex h-10 w-10 touch-manipulation select-none items-center justify-center rounded-md border text-xs font-bold transition-colors ${
                                 activeA && !ownR
                                   ? 'border-[#81C784] bg-[#43A047] text-white'
                                   : 'border-white/15 bg-[#161616] text-[#9E9E9E] hover:border-[#43A047] hover:text-white'
@@ -777,7 +797,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                               onClick={() => handleToggleLocalityMode(city, locality, 'R')}
                               aria-label={`${locality} Reject (R)`}
                               aria-pressed={activeR}
-                              className={`flex h-8 w-8 items-center justify-center rounded border text-xs font-bold transition-colors ${
+                              className={`flex h-10 w-10 touch-manipulation select-none items-center justify-center rounded-md border text-xs font-bold transition-colors ${
                                 activeR
                                   ? 'border-[#FF8A80] bg-[#C62828] text-white'
                                   : 'border-white/15 bg-[#161616] text-[#9E9E9E] hover:border-[#C62828] hover:text-white'

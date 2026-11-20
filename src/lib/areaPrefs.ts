@@ -15,13 +15,17 @@ const KEY_REJECT_DROP_JSON = 'clicker_area_prefs_reject_drop_json';
 const KEY_PAUSED = 'clicker_area_prefs_paused';
 const KEY_PICKUP_KEYWORDS = 'clicker_area_prefs_pickup_keywords';
 const KEY_MAX_PICKUP_KM = 'clicker_area_prefs_max_pickup_km';
+const KEY_ALLOW_MISSING_KM = 'clicker_area_prefs_allow_missing_km';
 
 const WHITESPACE_RE = /\s+/g;
 const ACCEPT_IN_RE = /accept\s*in/i;
-const KM_HEADER_RE = /\(\s*\d+(?:\.\d+)?\s*(?:km|m)\s*\)/;
-const PAREN_DIST_RE = /\(\s*(\d+(?:\.\d+)?)\s*(km|m)\s*\)/i;
-const DIST_KM_RE = /(\d+(?:\.\d+)?)\s*km\b/i;
-const DIST_M_RE = /(\d+(?:\.\d+)?)\s*m\b/i;
+const KM_HEADER_RE = /(?:\(\s*)?\d+(?:[.,]\d+)?\s*(?:kms?|kilometers?|meters?|mtrs?|m)(?:\s*away|\s*from\s*you)?(?:\s*\))?/i;
+const TOTAL_TRIP_TAG_RE = /\b(?:total|trip|fare|est(?:imated)?|overall)\b/i;
+const NON_PICKUP_DIST_TAG_RE = /\b(?:drop(?:[\s-]*off)?|destination|deliver(?:y)?|total|trip|fare|est(?:imated)?|overall)\b/i;
+const DIST_TOKEN_RE = /(\d+(?:[.,]\d+)?)\s*(kms?|kilometers?|meters?|mtrs?|m)\b/gi;
+const PIN_LINE_RE = /(?<![0-9])\d{6}(?![0-9])|,\s*india\b|\b(?:gurugram|gurgaon|new delhi|delhi|noida|greater noida|faridabad|ghaziabad|haryana|uttar pradesh)\b/i;
+const PICKUP_LABEL_RE = /\bpick[\s-]*up\b/i;
+const DROP_LABEL_RE = /\bdrop(?:[\s-]*off)?\b/i;
 const GREATER_NOIDA_RE = /greater[\s-]*noida|gr\.?\s*noida/g;
 const SECTOR_SPLIT_RE = /^(.+?)\s+(sector\s+[a-z0-9]+)$/;
 const PIN_RE = /(?<![0-9])(110\d{3})(?![0-9])/g;
@@ -144,28 +148,95 @@ export function splitOrder(rawText: string): [string, string] {
   }
 
   const lines = t.split(/\s*\|\s*|\n+/).map((l) => l.trim()).filter(Boolean);
-  const idx = lines
-    .map((line, i) => (KM_HEADER_RE.test(line.toLowerCase()) ? i : -1))
+
+  // 1. Explicit PICKUP / DROP markers (e.g. Porter's sidebar or headers)
+  const pLabelIdx = lines.findIndex((l) => PICKUP_LABEL_RE.test(l) && !DROP_LABEL_RE.test(l));
+  const dLabelIdx = lines.findIndex(
+    (l, i) => i > Math.max(0, pLabelIdx) && DROP_LABEL_RE.test(l) && !PICKUP_LABEL_RE.test(l)
+  );
+  if (pLabelIdx >= 0 && dLabelIdx > pLabelIdx) {
+    const pick = lines.slice(pLabelIdx, dLabelIdx).join(' | ');
+    const drop = lines.slice(dLabelIdx).join(' | ');
+    return [normalize(pick), normalize(drop)];
+  }
+  // If only DROP label is visible (e.g., PICKUP graphic didn't emit text)
+  if (pLabelIdx < 0 && dLabelIdx > 0) {
+    const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
+    const startPick = firstLineIsFare && dLabelIdx > 1 ? 1 : 0;
+    const pick = lines.slice(startPick, dLabelIdx).join(' | ');
+    const drop = lines.slice(dLabelIdx).join(' | ');
+    return [normalize(pick), normalize(drop)];
+  }
+
+  // 2. Distance header splitting (e.g. Pickup (0.7 km) ... Drop (8.4 km))
+  const allDistIdx = lines
+    .map((line, i) => (KM_HEADER_RE.test(line) ? i : -1))
     .filter((i) => i >= 0);
 
-  if (idx.length >= 2) {
-    const startOf = (i: number) => (i > 0 && lines[i].trim().startsWith('(') ? i - 1 : i);
-    const s1 = startOf(idx[0]);
-    const s2 = startOf(idx[1]);
+  const legDistIdx = allDistIdx.filter((i) => !TOTAL_TRIP_TAG_RE.test(lines[i]));
+
+  if (legDistIdx.length >= 2) {
+    const startOf = (i: number, prevIdx: number) => {
+      if (i <= 0) return i;
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith('(') && i - 1 > prevIdx) {
+        return i - 1;
+      }
+      return i;
+    };
+    const s1 = startOf(legDistIdx[0], -1);
+    const s2 = startOf(legDistIdx[1], legDistIdx[0]);
     if (s2 > s1) {
       const pick = lines.slice(s1, s2).join(' | ');
       const drop = lines.slice(s2).join(' | ');
       return [normalize(pick), normalize(drop)];
     }
   }
+
+  // 3. Fallback: two address blocks ending with 6-digit PIN, ", India", or city+address (like Porter ₹41 popup)
+  const addrEndIdx = lines
+    .map((line, i) => (line.length >= 16 && PIN_LINE_RE.test(line) ? i : -1))
+    .filter((i) => i >= 0);
+  if (addrEndIdx.length >= 2) {
+    const splitAfterFirstAddr = addrEndIdx[0] + 1;
+    if (splitAfterFirstAddr < lines.length) {
+      // Skip leading fare-only line like "₹41" or "Rs 41"
+      const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
+      const startPick = firstLineIsFare && splitAfterFirstAddr > 1 ? 1 : 0;
+      const pick = lines.slice(startPick, splitAfterFirstAddr).join(' | ');
+      const drop = lines.slice(splitAfterFirstAddr).join(' | ');
+      return [normalize(pick), normalize(drop)];
+    }
+  }
+
   const all = normalize(t);
   return [all, all];
 }
 
 export function isTripDetailsScreen(screenText: string): boolean {
   const raw = screenText.toLowerCase();
-  const markers = ['cash to collect', 'trip fare', 'view details', 'call customer', 'porter support'];
-  return markers.filter((m) => raw.includes(m)).length >= 2;
+  const strongMarkers = [
+    'cash to collect',
+    'trip fare',
+    'porter support',
+    'call customer',
+    'avoid calling the customer',
+    'this fare may change',
+    'flat no./floor no./shop no.',
+    'flat no./shop name',
+    "customer's flat no",
+    'end trip',
+    'start trip',
+    'complete trip',
+    'arrived at pickup',
+    'arrived at drop',
+    'reached pickup',
+    'reached drop',
+    'collect cash',
+  ];
+  if (strongMarkers.some((m) => raw.includes(m))) return true;
+  const softMarkers = ['view details', 'drop at', 'pickup from', 'trip started'];
+  return softMarkers.filter((m) => raw.includes(m)).length >= 2;
 }
 
 export function screenHasAcceptWord(screenText: string): boolean {
@@ -272,23 +343,33 @@ export function setMaxPickupKm(km: number): void {
   localStorage.setItem(KEY_MAX_PICKUP_KM, String(clean));
 }
 
+export function getAllowPickupWhenKmMissing(): boolean {
+  const raw = localStorage.getItem(KEY_ALLOW_MISSING_KM);
+  // Default true so popups without KM (e.g. ₹41 Porter cards) still get picked up
+  return raw !== 'false';
+}
+
+export function setAllowPickupWhenKmMissing(allow: boolean): void {
+  localStorage.setItem(KEY_ALLOW_MISSING_KM, allow ? 'true' : 'false');
+}
+
 export function extractDistanceKm(text: string): number | null {
-  const parenMatch = PAREN_DIST_RE.exec(text);
-  if (parenMatch?.[1]) {
-    const val = Number(parenMatch[1]);
-    if (Number.isFinite(val)) {
-      return parenMatch[2]?.toLowerCase() === 'm' ? val / 1000 : val;
+  DIST_TOKEN_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = DIST_TOKEN_RE.exec(text)) !== null) {
+    const rawNum = match[1]?.replace(',', '.') ?? '';
+    const unit = (match[2] ?? 'km').toLowerCase();
+    const val = Number(rawNum);
+    if (!Number.isFinite(val)) continue;
+    const km = unit.startsWith('m') ? val / 1000 : val;
+
+    // Never treat Drop / Total / Trip / Fare distances as Pickup distance
+    const ctxStart = Math.max(0, match.index - 24);
+    const ctxEnd = Math.min(text.length, match.index + match[0].length + 24);
+    const around = text.slice(ctxStart, ctxEnd);
+    if (!NON_PICKUP_DIST_TAG_RE.test(around)) {
+      return km;
     }
-  }
-  const kmMatch = DIST_KM_RE.exec(text);
-  if (kmMatch?.[1]) {
-    const val = Number(kmMatch[1]);
-    if (Number.isFinite(val)) return val;
-  }
-  const mMatch = DIST_M_RE.exec(text);
-  if (mMatch?.[1]) {
-    const val = Number(mMatch[1]);
-    if (Number.isFinite(val)) return val / 1000;
   }
   return null;
 }
@@ -353,6 +434,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
   const rejectDropSelections = getRejectDropSelections();
   const pickupKeywords = getPickupKeywords();
   const maxPickupKm = getMaxPickupKm();
+  const allowMissingKm = getAllowPickupWhenKmMissing();
   const [pickupText, dropText] = splitOrder(rawScreenText);
   const pickupDistanceKm = extractDistanceKm(pickupText);
   const tripDetails = isTripDetailsScreen(rawScreenText);
@@ -500,20 +582,37 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     };
   }
 
-  if (hasDistanceRule && pickupDistanceKm !== null && pickupDistanceKm <= maxPickupKm + 0.0001) {
-    return {
-      matched: true,
-      rejected: false,
-      rejectedBy: null,
-      reason: `ACCEPT (A) — Pickup Distance (${pickupDistanceKm} km <= ${maxPickupKm} km) -> Drop (${dropHit})`,
-      pickupText,
-      dropText,
-      pickupDistanceKm,
-      isTripDetails: false,
-      hasAcceptWord,
-      pickupMatchedBy: `<= ${maxPickupKm} km (${pickupDistanceKm} km)`,
-      dropMatchedBy: dropHit,
-    };
+  if (hasDistanceRule) {
+    if (pickupDistanceKm !== null && pickupDistanceKm <= maxPickupKm + 0.0001) {
+      return {
+        matched: true,
+        rejected: false,
+        rejectedBy: null,
+        reason: `ACCEPT (A) — Pickup Distance (${pickupDistanceKm} km <= ${maxPickupKm} km) -> Drop (${dropHit})`,
+        pickupText,
+        dropText,
+        pickupDistanceKm,
+        isTripDetails: false,
+        hasAcceptWord,
+        pickupMatchedBy: `<= ${maxPickupKm} km (${pickupDistanceKm} km)`,
+        dropMatchedBy: dropHit,
+      };
+    }
+    if (pickupDistanceKm === null && allowMissingKm && !hasPickupCities && !hasKeywords) {
+      return {
+        matched: true,
+        rejected: false,
+        rejectedBy: null,
+        reason: `ACCEPT (A) — Card par Pickup KM nahi likha (<= ${maxPickupKm} km fallback) -> Drop (${dropHit})`,
+        pickupText,
+        dropText,
+        pickupDistanceKm,
+        isTripDetails: false,
+        hasAcceptWord,
+        pickupMatchedBy: 'Pickup KM missing (allowed)',
+        dropMatchedBy: dropHit,
+      };
+    }
   }
 
   return {

@@ -64,6 +64,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 ""
             }
         )
+        binding.cbAllowMissingKm.isChecked = AreaPrefs.isAllowPickupWhenKmMissing(this)
 
         binding.btnDistOff.setOnClickListener { binding.etMaxPickupKm.setText("") }
         binding.btnDist05.setOnClickListener { binding.etMaxPickupKm.setText("0.5") }
@@ -105,12 +106,14 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     binding.pickupKeywords.setText("")
                     binding.etMaxPickupKm.setText("")
                     binding.cbNoPickupRestriction.isChecked = true
+                    binding.cbAllowMissingKm.isChecked = true
                     AreaPrefs.setPickupSelections(this, emptyMap())
                     AreaPrefs.setDropSelections(this, emptyMap())
                     AreaPrefs.setRejectPickupSelections(this, emptyMap())
                     AreaPrefs.setRejectDropSelections(this, emptyMap())
                     AreaPrefs.setPickupKeywords(this, emptyList())
                     AreaPrefs.setMaxPickupKm(this, 0f)
+                    AreaPrefs.setAllowPickupWhenKmMissing(this, true)
                     renderCities()
                     Toast.makeText(this, "Sab location (A aur R) hat gaye", Toast.LENGTH_SHORT).show()
                 }
@@ -122,9 +125,11 @@ class AreaPreferenceActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 pendingSearchRunnable?.let { searchHandler.removeCallbacks(it) }
-                val r = Runnable { renderCities() }
+                val r = Runnable {
+                    if (!isFinishing && !isDestroyed) renderCities()
+                }
                 pendingSearchRunnable = r
-                searchHandler.postDelayed(r, 180L)
+                searchHandler.postDelayed(r, 40L)
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -201,12 +206,14 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
     private fun makeModeBox(label: String, isAcceptBox: Boolean, isActive: Boolean): TextView {
         val dp = resources.displayMetrics.density
-        val sizePx = (36 * dp).toInt()
+        val sizePx = (42 * dp).toInt()
         return TextView(this).apply {
             text = label
             gravity = Gravity.CENTER
-            textSize = 13f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
+            isClickable = true
+            isFocusable = true
             layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
                 marginStart = (6 * dp).toInt()
             }
@@ -361,7 +368,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
             }
 
             var childrenBuilt = false
-            var displayLimit = 150
+            var displayLimit = 350
 
             fun refreshHeaderBoxes() {
                 val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
@@ -668,11 +675,17 @@ class AreaPreferenceActivity : AppCompatActivity() {
         }
         val maxKm = binding.etMaxPickupKm.text.toString().trim().replace(',', '.').toFloatOrNull()?.coerceAtLeast(0f) ?: 0f
         AreaPrefs.setMaxPickupKm(this, maxKm)
+        AreaPrefs.setAllowPickupWhenKmMissing(this, binding.cbAllowMissingKm.isChecked)
         AreaPrefs.setDropSelections(this, workingDropA)
         AreaPrefs.setRejectPickupSelections(this, workingPickupR)
         AreaPrefs.setRejectDropSelections(this, workingDropR)
 
-        Toast.makeText(this, "Saved (A, R & Distance rules)", Toast.LENGTH_SHORT).show()
+        val msg = if (workingDropA.isEmpty()) {
+            "Saved! Dhyan dein: DROP tab me kam se kam 1 area (A) select karein warna order nahi uthega"
+        } else {
+            "Saved (A, R & Distance rules)"
+        }
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         finish()
     }
 }

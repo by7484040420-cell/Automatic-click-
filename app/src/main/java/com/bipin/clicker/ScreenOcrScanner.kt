@@ -117,7 +117,7 @@ object ScreenOcrScanner {
     fun findThumbCenterX(bmp: Bitmap, slider: Rect): Int? {
         val y = slider.centerY().coerceIn(0, bmp.height - 1)
         val from = slider.left.coerceAtLeast(0)
-        val to = minOf(slider.left + (slider.height() * 1.5f).toInt(), bmp.width - 1)
+        val to = minOf(slider.left + (slider.height() * 1.05f).toInt(), bmp.width - 1)
         var first = -1
         var last = -1
         for (x in from..to) {

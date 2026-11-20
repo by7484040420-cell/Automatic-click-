@@ -12,6 +12,16 @@ const CUSTOM_LOCALITIES_KEY = 'clicker_area_prefs_custom_localities';
 
 let cachedVerified: CityLocalitiesMap | null = null;
 let cachedPins: ZonePincodesMap | null = null;
+let cachedMerged: CityLocalitiesMap | null = null;
+
+const naturalCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+});
+
+export function naturalCompareLocalities(a: string, b: string): number {
+  return naturalCollator.compare(a, b);
+}
 
 export function loadVerifiedCities(): CityLocalitiesMap {
   if (cachedVerified) return cachedVerified;
@@ -19,7 +29,7 @@ export function loadVerifiedCities(): CityLocalitiesMap {
   const cities = data.cities ?? {};
   for (const city of Object.keys(cities)) {
     const list = Array.isArray(cities[city]) ? [...cities[city]] : [];
-    result[city] = list.sort((a, b) => a.localeCompare(b));
+    result[city] = list.sort(naturalCompareLocalities);
   }
   cachedVerified = result;
   return result;
@@ -55,10 +65,12 @@ export function getCustomLocalities(): CityLocalitiesMap {
 }
 
 export function saveCustomLocalities(map: CityLocalitiesMap): void {
+  cachedMerged = null;
   localStorage.setItem(CUSTOM_LOCALITIES_KEY, JSON.stringify(map));
 }
 
 export function loadAllCitiesWithCustom(): CityLocalitiesMap {
+  if (cachedMerged) return cachedMerged;
   const verified = loadVerifiedCities();
   const custom = getCustomLocalities();
   const merged: CityLocalitiesMap = {};
@@ -76,7 +88,9 @@ export function loadAllCitiesWithCustom(): CityLocalitiesMap {
         combined.push(item);
       }
     }
+    combined.sort(naturalCompareLocalities);
     merged[city] = combined;
   }
+  cachedMerged = merged;
   return merged;
 }

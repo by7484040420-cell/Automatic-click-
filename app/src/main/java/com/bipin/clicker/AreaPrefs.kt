@@ -27,6 +27,7 @@ object AreaPrefs {
     private const val KEY_PAUSED = "is_paused"
     private const val KEY_PICKUP_KEYWORDS = "pickup_keywords"
     private const val KEY_MAX_PICKUP_KM = "max_pickup_km"
+    private const val KEY_ALLOW_MISSING_KM = "allow_pickup_when_km_missing"
 
     // v13 SPEED: selections + pause state memory me cache hain (0ms lookup)
     @Volatile private var isPausedCache: Boolean? = null
@@ -36,6 +37,7 @@ object AreaPrefs {
     @Volatile private var rejectDropCache: Map<String, Set<String>>? = null
     @Volatile private var pickupKeywordsCache: List<String>? = null
     @Volatile private var maxPickupKmCache: Float? = null
+    @Volatile private var allowMissingKmCache: Boolean? = null
 
     private fun copySelections(src: Map<String, Set<String>>): Map<String, Set<String>> {
         val out = LinkedHashMap<String, Set<String>>()
@@ -191,18 +193,36 @@ object AreaPrefs {
         prefs(context).edit().putFloat(KEY_MAX_PICKUP_KM, clean).apply()
     }
 
-    private val PAREN_DIST_RE = Regex("\\(\\s*(\\d+(?:\\.\\d+)?)\\s*(km|m)\\s*\\)", RegexOption.IGNORE_CASE)
-    private val DIST_KM_RE = Regex("(\\d+(?:\\.\\d+)?)\\s*km\\b", RegexOption.IGNORE_CASE)
-    private val DIST_M_RE = Regex("(\\d+(?:\\.\\d+)?)\\s*m\\b", RegexOption.IGNORE_CASE)
+    /** Popup par Pickup KM na likha ho (jaise ₹41 wala card) to bhi Drop match par uthaye (default true). */
+    fun isAllowPickupWhenKmMissing(context: Context): Boolean =
+        allowMissingKmCache ?: prefs(context).getBoolean(KEY_ALLOW_MISSING_KM, true).also {
+            allowMissingKmCache = it
+        }
+
+    fun setAllowPickupWhenKmMissing(context: Context, allow: Boolean) {
+        allowMissingKmCache = allow
+        prefs(context).edit().putBoolean(KEY_ALLOW_MISSING_KM, allow).apply()
+    }
+
+    private val DIST_TOKEN_RE = Regex("(\\d+(?:[.,]\\d+)?)\\s*(kms?|kilometers?|meters?|mtrs?|m)\\b", RegexOption.IGNORE_CASE)
+    private val TOTAL_TRIP_TAG_RE = Regex("\\b(?:total|trip|fare|est(?:imated)?|overall)\\b", RegexOption.IGNORE_CASE)
+    private val NON_PICKUP_DIST_TAG_RE = Regex("\\b(?:drop(?:[\\s-]*off)?|destination|deliver(?:y)?|total|trip|fare|est(?:imated)?|overall)\\b", RegexOption.IGNORE_CASE)
 
     fun extractDistanceKm(text: String): Float? {
-        PAREN_DIST_RE.find(text)?.let { m ->
-            val v = m.groupValues.getOrNull(1)?.toFloatOrNull() ?: return@let
+        for (m in DIST_TOKEN_RE.findAll(text)) {
+            val rawNum = m.groupValues.getOrNull(1)?.replace(',', '.') ?: continue
             val unit = m.groupValues.getOrNull(2)?.lowercase() ?: "km"
-            return if (unit == "m") v / 1000f else v
+            val valNum = rawNum.toFloatOrNull() ?: continue
+            val km = if (unit.startsWith("m")) valNum / 1000f else valNum
+
+            // Kabhi bhi Drop / Total / Trip / Fare ki doori ko Pickup KM mat maano
+            val ctxStart = (m.range.first - 24).coerceAtLeast(0)
+            val ctxEnd = (m.range.last + 25).coerceAtMost(text.length)
+            val around = text.substring(ctxStart, ctxEnd)
+            if (!NON_PICKUP_DIST_TAG_RE.containsMatchIn(around)) {
+                return km
+            }
         }
-        DIST_KM_RE.find(text)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.let { return it }
-        DIST_M_RE.find(text)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.let { return it / 1000f }
         return null
     }
 
@@ -215,6 +235,7 @@ object AreaPrefs {
         val rd = getRejectDropSelections(app)
         val kw = getPickupKeywords(app)
         getMaxPickupKm(app)
+        isAllowPickupWhenKmMissing(app)
 
         fun warmMap(m: Map<String, Set<String>>) {
             for ((city, locs) in m) {
@@ -292,6 +313,13 @@ object AreaPrefs {
         if (maxPickupKm > 0f) {
             val pickupDistKm = extractDistanceKm(pickupText)
             if (pickupDistKm != null && pickupDistKm <= maxPickupKm + 0.0001f) return true
+            if (pickupDistKm == null &&
+                isAllowPickupWhenKmMissing(context) &&
+                pickupSelections.isEmpty() &&
+                pickupKeywords.isEmpty()
+            ) {
+                return true
+            }
         }
         return false
     }
@@ -299,31 +327,82 @@ object AreaPrefs {
     // ---------- Order card ko pickup / drop me todna ----------
 
     private val ACCEPT_IN = Regex("accept\\s*in", RegexOption.IGNORE_CASE)
-    private val KM_HEADER = Regex("\\(\\s*\\d+(?:\\.\\d+)?\\s*(?:km|m)\\s*\\)")
+    private val KM_HEADER = Regex("(?:\\(\\s*)?\\d+(?:[.,]\\d+)?\\s*(?:kms?|kilometers?|meters?|mtrs?|m)(?:\\s*away|\\s*from\\s*you)?(?:\\s*\\))?", RegexOption.IGNORE_CASE)
+    private val LINE_SPLIT_RE = Regex("\\s*\\|\\s*|\\n+")
+    private val PICKUP_LABEL_RE = Regex("\\bpick[\\s-]*up\\b", RegexOption.IGNORE_CASE)
+    private val DROP_LABEL_RE = Regex("\\bdrop(?:[\\s-]*off)?\\b", RegexOption.IGNORE_CASE)
+    private val PIN_LINE_RE = Regex("(?<![0-9])\\d{6}(?![0-9])|,\\s*india\\b|\\b(?:gurugram|gurgaon|new delhi|delhi|noida|greater noida|faridabad|ghaziabad|haryana|uttar pradesh)\\b", RegexOption.IGNORE_CASE)
+    private val FARE_ONLY_RE = Regex("^(?:\\u20B9|rs\\.?|inr)\\s*\\d+", RegexOption.IGNORE_CASE)
 
     /**
      * "Accept in Ns" ke baad ka text peeche wali screen ka hota hai (galat match karata tha),
-     * isliye wahin tak ka text lete hain. Card me do "(x.x km)" wali header lines hoti hain:
-     * pehli = Pickup, doosri = Drop. Dono mile to text alag-alag; warna poora card dono ke liye.
+     * isliye wahin tak ka text lete hain.
+     * 1) Pehle explicit PICKUP / DROP markers par todte hain
+     * 2) Phir 2 leg-distance headers par (Total/Trip/Fare hamesha hata kar)
+     * 3) Phir 2 address blocks (6-digit PIN / India / city) par — jaise bina KM wala ₹41 popup
      */
     private fun splitOrder(rawText: String): Pair<String, String> {
         var t = rawText
         val acc = ACCEPT_IN.find(t)
         if (acc != null) t = t.substring(0, acc.range.first)
 
-        val lines = t.split(" | ")
-        val idx = lines.indices.filter { KM_HEADER.containsMatchIn(lines[it].lowercase()) }
-        if (idx.size >= 2) {
-            // Agar "(0.7 km)" alag line me aaya to uske upar wali line (sector ka naam) bhi saath lo
-            fun startOf(i: Int): Int = if (i > 0 && lines[i].trim().startsWith("(")) i - 1 else i
-            val s1 = startOf(idx[0])
-            val s2 = startOf(idx[1])
+        val lines = t.split(LINE_SPLIT_RE).map { it.trim() }.filter { it.isNotEmpty() }
+
+        // 1. Explicit PICKUP / DROP marker lines
+        val pLabelIdx = lines.indexOfFirst { PICKUP_LABEL_RE.containsMatchIn(it) && !DROP_LABEL_RE.containsMatchIn(it) }
+        val dSearchStart = if (pLabelIdx >= 0) pLabelIdx + 1 else 1
+        val dLabelIdx = if (dSearchStart < lines.size) {
+            (dSearchStart until lines.size).firstOrNull {
+                DROP_LABEL_RE.containsMatchIn(lines[it]) && !PICKUP_LABEL_RE.containsMatchIn(lines[it])
+            } ?: -1
+        } else -1
+
+        if (pLabelIdx >= 0 && dLabelIdx > pLabelIdx) {
+            val pick = lines.subList(pLabelIdx, dLabelIdx).joinToString(" | ")
+            val drop = lines.subList(dLabelIdx, lines.size).joinToString(" | ")
+            return normalize(pick) to normalize(drop)
+        }
+        if (pLabelIdx < 0 && dLabelIdx > 0) {
+            val startPick = if (FARE_ONLY_RE.containsMatchIn(lines[0]) && dLabelIdx > 1) 1 else 0
+            val pick = lines.subList(startPick, dLabelIdx).joinToString(" | ")
+            val drop = lines.subList(dLabelIdx, lines.size).joinToString(" | ")
+            return normalize(pick) to normalize(drop)
+        }
+
+        // 2. Distance headers (Total/Trip/Fare hamesha exclude)
+        val legDistIdx = lines.indices.filter {
+            KM_HEADER.containsMatchIn(lines[it]) && !TOTAL_TRIP_TAG_RE.containsMatchIn(lines[it])
+        }
+
+        if (legDistIdx.size >= 2) {
+            fun startOf(i: Int, prevIdx: Int): Int {
+                if (i <= 0) return i
+                val trimmed = lines[i].trim()
+                return if (trimmed.startsWith("(") && i - 1 > prevIdx) i - 1 else i
+            }
+            val s1 = startOf(legDistIdx[0], -1)
+            val s2 = startOf(legDistIdx[1], legDistIdx[0])
             if (s2 > s1) {
                 val pick = lines.subList(s1, s2).joinToString(" | ")
                 val drop = lines.subList(s2, lines.size).joinToString(" | ")
                 return normalize(pick) to normalize(drop)
             }
         }
+
+        // 3. Two address blocks fallback (bina KM wale cards jaise ₹41 popup)
+        val addrEndIdx = lines.indices.filter {
+            lines[it].length >= 16 && PIN_LINE_RE.containsMatchIn(lines[it])
+        }
+        if (addrEndIdx.size >= 2) {
+            val splitAfterFirstAddr = addrEndIdx[0] + 1
+            if (splitAfterFirstAddr < lines.size) {
+                val startPick = if (FARE_ONLY_RE.containsMatchIn(lines[0]) && splitAfterFirstAddr > 1) 1 else 0
+                val pick = lines.subList(startPick, splitAfterFirstAddr).joinToString(" | ")
+                val drop = lines.subList(splitAfterFirstAddr, lines.size).joinToString(" | ")
+                return normalize(pick) to normalize(drop)
+            }
+        }
+
         val all = normalize(t)
         return all to all
     }

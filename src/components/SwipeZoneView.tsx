@@ -136,7 +136,7 @@ export const SwipeZoneView: React.FC<SwipeZoneViewProps> = ({ onNotify, onClose 
         <div className="lg:col-span-7">
           <div
             ref={canvasRef}
-            className="relative mx-auto aspect-[9/14] max-h-[540px] w-full max-w-[360px] select-none overflow-hidden rounded-3xl border border-white/15 bg-[#191C22] p-5 shadow-xl"
+            className="relative mx-auto aspect-[9/14] max-h-[540px] w-full max-w-[360px] touch-none select-none overflow-hidden rounded-3xl border border-white/15 bg-[#191C22] p-5 shadow-xl"
           >
             {/* Simulated Delivery Order Card */}
             <div className="flex h-full flex-col justify-between">
@@ -205,6 +205,11 @@ export const SwipeZoneView: React.FC<SwipeZoneViewProps> = ({ onNotify, onClose 
               aria-label="Drag to move entire swipe zone"
               onPointerDown={(e) => {
                 e.preventDefault();
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                } catch {
+                  // ignore if unsupported
+                }
                 dragMode.current = 'move';
                 dragOrigin.current = {
                   clientX: e.clientX,
@@ -218,7 +223,7 @@ export const SwipeZoneView: React.FC<SwipeZoneViewProps> = ({ onNotify, onClose 
                 left: `${zone.startX}%`,
                 top: `${zone.y}%`,
               }}
-              className="absolute z-20 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full border-2 border-white bg-[#00B446]/95 text-base font-bold text-white shadow-lg active:cursor-grabbing"
+              className="absolute z-20 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 touch-none cursor-grab items-center justify-center rounded-full border-2 border-white bg-[#00B446]/95 text-base font-bold text-white shadow-lg active:cursor-grabbing"
             >
               »
             </button>
@@ -229,6 +234,11 @@ export const SwipeZoneView: React.FC<SwipeZoneViewProps> = ({ onNotify, onClose 
               aria-label="Drag to resize swipe length"
               onPointerDown={(e) => {
                 e.preventDefault();
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                } catch {
+                  // ignore if unsupported
+                }
                 dragMode.current = 'resize';
                 dragOrigin.current = {
                   clientX: e.clientX,
@@ -242,7 +252,7 @@ export const SwipeZoneView: React.FC<SwipeZoneViewProps> = ({ onNotify, onClose 
                 left: `${zone.endX}%`,
                 top: `${zone.y}%`,
               }}
-              className="absolute z-20 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded-full border-2 border-white bg-[#FF8F00]/95 text-[10px] font-bold text-white shadow-lg"
+              className="absolute z-20 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 touch-none cursor-ew-resize items-center justify-center rounded-full border-2 border-white bg-[#FF8F00]/95 text-[10px] font-bold text-white shadow-lg"
             >
               END
             </button>

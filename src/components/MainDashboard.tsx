@@ -60,8 +60,20 @@ const SAMPLE_ORDERS: { label: string; text: string }[] = [
     text: 'Hauz Khas, New Delhi 110017 (0.9 km) | Greater Noida Alpha 1 (24.5 km) | Accept in 7s',
   },
   {
-    label: 'Trip Details Guard (Already Accepted)',
-    text: 'Trip Details | Cash to Collect Rs 410 | Trip Fare Rs 410 | Call Customer | Porter Support | Connaught Place, Delhi | Noida Sector 18',
+    label: 'Porter ₹41 Popup (No KM Shown)',
+    text: '₹41 | Sector 10A | 153, Housing Board Colony, Sector 10A, Gurugram, Haryana 122001, India | Sector 10A | 153, Housing Board Colony, Sector 10A, Gurugram, Haryana 122001, India | Accept in 5s',
+  },
+  {
+    label: 'Pickup 600 m (KM Filter Test)',
+    text: 'Total 14.2 km | 600 m away | Connaught Place, New Delhi | 13.6 km | Sector 18 Market, Noida | Accept in 7s',
+  },
+  {
+    label: 'Trip Details Guard (Cash to Collect)',
+    text: 'Trip Details | Cash to Collect ₹188 | Trip Fare ₹213.0 | View Details | Call Customer | Porter Support | Nehru Place, New Delhi | Udyog Vihar, Gurugram',
+  },
+  {
+    label: 'Active Trip Guard (End Trip >>>)',
+    text: "Customer's Flat no./Shop name | first floor plot no 88 | Drop at | Udyog Vihar, Phase IV, Udyog Vihar, Sector 18, Gurugram, Haryana 122015, India | End Trip >>>",
   },
 ];
 

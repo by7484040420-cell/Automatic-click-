@@ -102,6 +102,11 @@ export const FloatingBubble: React.FC<FloatingBubbleProps> = ({
       title="Tap: Pickup/Drop kholein | Long press (600ms): Bubble band karein"
       onPointerDown={(e) => {
         e.preventDefault();
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore if unsupported
+        }
         const ds = dragState.current;
         ds.dragging = true;
         ds.moved = false;
@@ -127,7 +132,7 @@ export const FloatingBubble: React.FC<FloatingBubbleProps> = ({
         top: `${pos.y}px`,
         backgroundColor: bg,
       }}
-      className="fixed z-50 flex h-[64px] w-[88px] cursor-grab select-none items-center justify-center rounded-xl border border-white/25 text-center text-[11px] font-bold leading-tight whitespace-pre-line text-white opacity-85 shadow-lg active:cursor-grabbing"
+      className="fixed z-50 flex h-[64px] w-[88px] touch-none cursor-grab select-none items-center justify-center rounded-xl border border-white/25 text-center text-[11px] font-bold leading-tight whitespace-pre-line text-white opacity-85 shadow-lg active:cursor-grabbing"
     >
       {label}
     </div>
