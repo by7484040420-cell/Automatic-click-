@@ -186,6 +186,15 @@
             </LinearLayout>
         </com.google.android.gms.ads.nativead.NativeAdView>
 
+        <Button
+            android:id="@+id/btnWhatsappHelp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:backgroundTint="#1D3324"
+            android:textColor="#81C784"
+            android:text="WhatsApp Help / Support (8383872065)" />
+
         <TextView
             android:id="@+id/tvAdvanced"
             android:layout_width="match_parent"

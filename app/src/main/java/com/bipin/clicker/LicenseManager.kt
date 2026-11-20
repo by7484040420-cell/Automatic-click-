@@ -2,13 +2,18 @@
 // Yaha rakho: app/src/main/java/com/bipin/clicker/LicenseManager.kt
 package com.bipin.clicker
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.widget.Toast
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -44,6 +49,8 @@ object LicenseManager {
     private const val K_FALLBACK_ID = "fallback_id"
     private const val K_SERVER_URL = "payment_server_url"
     private const val MARKER = "#BIPIN-LICENSES"
+    const val OWNER_WHATSAPP_NUMBER = "918383872065"
+    const val OWNER_WHATSAPP_DISPLAY = "8383872065"
 
     @Volatile private var loaded = false
     @Volatile private var expiryMs = 0L
@@ -184,6 +191,49 @@ object LicenseManager {
                 }
         }
         return raw.uppercase(Locale.ROOT).take(12)
+    }
+
+    fun copyDeviceId(ctx: Context): String {
+        val id = deviceId(ctx)
+        try {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("SwiftGate Device ID", id))
+        } catch (_: Exception) {
+        }
+        return id
+    }
+
+    fun openWhatsAppSupport(ctx: Context, isHelp: Boolean = false, extraInfo: String = "") {
+        val id = copyDeviceId(ctx)
+        Toast.makeText(
+            ctx,
+            "Device ID ($id) copy ho gayi — WhatsApp khul raha hai",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        val msg = buildString {
+            append(
+                if (isHelp) "Namaste Sir, mujhe SwiftGate payment/app help chahiye."
+                else "Namaste Sir, SwiftGate approval chahiye."
+            )
+            append("\nDevice ID: ").append(id)
+            if (extraInfo.isNotBlank()) {
+                append("\n").append(extraInfo)
+            }
+        }
+        val waUrl = "https://wa.me/$OWNER_WHATSAPP_NUMBER?text=${Uri.encode(msg)}"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(waUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            ctx.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(
+                ctx,
+                "WhatsApp par $OWNER_WHATSAPP_DISPLAY ko message karein (ID copy ho gayi hai)",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     fun remainingText(ctx: Context): String {

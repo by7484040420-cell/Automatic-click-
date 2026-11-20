@@ -92,6 +92,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.btnSwipeZone.setOnClickListener { openSwipeZoneEditor() }
+        binding.btnWhatsappHelp.setOnClickListener {
+            LicenseManager.openWhatsAppSupport(this, isHelp = true)
+        }
         binding.btnOwnerAutoApprove.setOnClickListener { OwnerPaytmConfig.showSetupDialog(this) }
 
         // First frame turant render hone ke baad Ads load karo (app open lag na ho)

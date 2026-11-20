@@ -85,7 +85,7 @@ const DEFAULT_PLANS: SubscriptionPlan[] = [
   { id: 'plan_15d', name: '15 Days Pass', durationHours: 24 * 15, priceInr: 350, badge: 'Best Value' },
 ];
 
-const DEFAULT_BUSINESS_NAME = 'BIPIN KUMAR YADAV';
+const DEFAULT_BUSINESS_NAME = 'SwiftGate';
 const DEFAULT_BUSINESS_UPI_VPA = 'paytmqr5i4hko@ptys';
 
 function createDefaultStore(): StoreState {
@@ -645,6 +645,11 @@ async function startServer(): Promise<void> {
     }
 
     const now = Date.now();
+    for (const prevOrder of Object.values(store.orders)) {
+      if (prevOrder.deviceId === deviceId && prevOrder.status === 'PENDING') {
+        prevOrder.status = 'EXPIRED';
+      }
+    }
     const orderId = 'SG' + crypto.randomBytes(5).toString('hex').toUpperCase();
     const expiresAt = now + 15 * 60 * 1000;
     const basePaise = Math.round(plan.priceInr * 100);

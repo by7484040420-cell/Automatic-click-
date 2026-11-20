@@ -247,22 +247,34 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
     }
   };
 
-  const handleShareWhatsApp = async () => {
-    const text = `SwiftGate Device ID: ${license.deviceId}`;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: 'SwiftGate Device ID', text });
-        return;
-      } catch {
-        // Fallback to WhatsApp URL
-      }
+  const OWNER_WHATSAPP_WA = '918383872065';
+
+  const openOwnerWhatsApp = async (mode: 'approval' | 'help') => {
+    try {
+      await navigator.clipboard.writeText(license.deviceId);
+    } catch {
+      // Ignore clipboard permission failure
     }
-    const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    const orderPart =
+      activeOrder && activeOrder.status === 'PENDING'
+        ? ` | Plan: ${activeOrder.plan.name} (₹${formatInr(activeOrder.amountInr)}, Ref: ${activeOrder.orderId})`
+        : '';
+    const text =
+      mode === 'help'
+        ? `Namaste Sir, mujhe SwiftGate payment / app help chahiye.\nDevice ID: ${license.deviceId}${orderPart}`
+        : `Namaste Sir, SwiftGate approval chahiye.\nDevice ID: ${license.deviceId}${orderPart}`;
+
+    onNotify(`ID copy ho gayi (${license.deviceId}) — WhatsApp (8383872065) khul raha hai`);
+    const url = `https://wa.me/${OWNER_WHATSAPP_WA}?text=${encodeURIComponent(text)}`;
     const link = document.createElement('a');
     link.href = url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.click();
+  };
+
+  const handleShareWhatsApp = async () => {
+    await openOwnerWhatsApp('approval');
   };
 
   const handleCheckApproval = async () => {
@@ -587,6 +599,16 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
                   <span>
                     Har 1 second me payment check ho raha hai — payment hote hi app khud open ho jayega
                   </span>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+                  <button
+                    type="button"
+                    onClick={() => void openOwnerWhatsApp('help')}
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-white/15 bg-[#1E1E1E] px-3 py-1.5 text-xs font-semibold text-[#E0E0E0] hover:bg-[#2A2A2A]"
+                  >
+                    <Share2 className="h-3.5 w-3.5 text-[#5AD278]" />
+                    <span>Payment / Net Dikat? WhatsApp Help (8383872065)</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -932,10 +954,10 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
 
           <button
             type="button"
-            onClick={handleShareWhatsApp}
+            onClick={() => void handleShareWhatsApp()}
             className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
           >
-            <Share2 className="h-4 w-4" />
+            <Share2 className="h-4 w-4 text-[#5AD278]" />
             <span>ID WhatsApp par Bhejein</span>
           </button>
 
@@ -949,6 +971,15 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
             <span>{checkingLicense ? 'Check ho raha hai...' : 'Approval Check Karein'}</span>
           </button>
         </div>
+
+        <button
+          type="button"
+          onClick={() => void openOwnerWhatsApp('help')}
+          className="mt-3 flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-[#5AD278]/35 bg-[#235F37]/25 px-4 py-2 text-xs font-semibold text-[#81C784] hover:bg-[#235F37]/45"
+        >
+          <Share2 className="h-4 w-4" />
+          <span>Help / Approval Support — WhatsApp Chat (8383872065)</span>
+        </button>
 
         {(license.lastError || license.debugInfo) && (
           <div className="mt-4 rounded-xl bg-[#141414] p-3 text-xs text-[#B0BEC5]">

@@ -195,7 +195,14 @@ class LicenseActivity : AppCompatActivity() {
 
         root.addView(Button(this).apply {
             text = "ID WhatsApp par Bhejein"
-            setOnClickListener { shareId() }
+            setOnClickListener { shareId(false) }
+        })
+
+        root.addView(Button(this).apply {
+            text = "Help / Payment Dikat? WhatsApp (8383872065)"
+            setTextColor(Color.parseColor("#81C784"))
+            setBackgroundColor(Color.parseColor("#1D3324"))
+            setOnClickListener { shareId(true) }
         })
 
         root.addView(Button(this).apply {
@@ -325,17 +332,9 @@ class LicenseActivity : AppCompatActivity() {
         handler.removeCallbacks(poll)
     }
 
-    private fun shareId() {
-        val text = "SwiftGate Device ID: ${LicenseManager.deviceId(this)}"
-        val i = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, text)
-        }
-        try {
-            startActivity(Intent.createChooser(i, "ID bhejein"))
-        } catch (e: Exception) {
-            Toast.makeText(this, "Share nahi ho paya, ID copy karke bhejein", Toast.LENGTH_LONG).show()
-        }
+    private fun shareId(isHelp: Boolean = false) {
+        val extra = activeOrderId?.let { "Order Ref: $it" }.orEmpty()
+        LicenseManager.openWhatsAppSupport(this, isHelp = isHelp, extraInfo = extra)
     }
 
     private fun doCheck() {
