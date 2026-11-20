@@ -34,7 +34,8 @@ import javax.crypto.spec.SecretKeySpec
  */
 object LicenseManager {
 
-    private const val DEFAULT_SERVER_URL = "https://ais-pre-6tn427fii6ngl2aha7z3rg-110169053172.asia-east1.run.app"
+    private const val DEFAULT_SERVER_URL = "https://automatic-click.ai.studio"
+    private const val LEGACY_404_URL = "https://ais-pre-6tn427fii6ngl2aha7z3rg-110169053172.asia-east1.run.app"
 
     // Aapka GitHub username: by7484040420-cell, repo: bipin-licenses, file: licenses.txt
     private const val API_URL =
@@ -108,7 +109,8 @@ object LicenseManager {
     fun getServerUrl(ctx: Context): String {
         val raw = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(K_SERVER_URL, null)?.trim()?.trimEnd('/')
-        return if (!raw.isNullOrEmpty() && (raw.startsWith("https://") || raw.startsWith("http://"))) {
+        return if (!raw.isNullOrEmpty() && raw != LEGACY_404_URL &&
+            (raw.startsWith("https://") || raw.startsWith("http://"))) {
             raw
         } else {
             DEFAULT_SERVER_URL
