@@ -149,26 +149,7 @@ export function splitOrder(rawText: string): [string, string] {
 
   const lines = t.split(/\s*\|\s*|\n+/).map((l) => l.trim()).filter(Boolean);
 
-  // 1. Explicit PICKUP / DROP markers (e.g. Porter's sidebar or headers)
-  const pLabelIdx = lines.findIndex((l) => PICKUP_LABEL_RE.test(l) && !DROP_LABEL_RE.test(l));
-  const dLabelIdx = lines.findIndex(
-    (l, i) => i > Math.max(0, pLabelIdx) && DROP_LABEL_RE.test(l) && !PICKUP_LABEL_RE.test(l)
-  );
-  if (pLabelIdx >= 0 && dLabelIdx > pLabelIdx) {
-    const pick = lines.slice(pLabelIdx, dLabelIdx).join(' | ');
-    const drop = lines.slice(dLabelIdx).join(' | ');
-    return [normalize(pick), normalize(drop)];
-  }
-  // If only DROP label is visible (e.g., PICKUP graphic didn't emit text)
-  if (pLabelIdx < 0 && dLabelIdx > 0) {
-    const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
-    const startPick = firstLineIsFare && dLabelIdx > 1 ? 1 : 0;
-    const pick = lines.slice(startPick, dLabelIdx).join(' | ');
-    const drop = lines.slice(dLabelIdx).join(' | ');
-    return [normalize(pick), normalize(drop)];
-  }
-
-  // 2. Distance header splitting (e.g. Pickup (0.7 km) ... Drop (8.4 km))
+  // 1. Distance header splitting (e.g. Sector 34 (2.9 km) ... Sector 52 (6.9 km))
   const allDistIdx = lines
     .map((line, i) => (KM_HEADER_RE.test(line) ? i : -1))
     .filter((i) => i >= 0);
@@ -193,14 +174,31 @@ export function splitOrder(rawText: string): [string, string] {
     }
   }
 
-  // 3. Fallback: two address blocks ending with 6-digit PIN, ", India", or city+address (like Porter ₹41 popup)
+  // 2. Explicit PICKUP / DROP markers (when card has no KM shown)
+  const pLabelIdx = lines.findIndex((l) => PICKUP_LABEL_RE.test(l) && !DROP_LABEL_RE.test(l));
+  const dLabelIdx = lines.findIndex(
+    (l, i) => i > Math.max(0, pLabelIdx) && DROP_LABEL_RE.test(l) && !PICKUP_LABEL_RE.test(l)
+  );
+  if (pLabelIdx >= 0 && dLabelIdx > pLabelIdx) {
+    const pick = lines.slice(pLabelIdx, dLabelIdx).join(' | ');
+    const drop = lines.slice(dLabelIdx).join(' | ');
+    return [normalize(pick), normalize(drop)];
+  }
+  if (pLabelIdx < 0 && dLabelIdx > 0) {
+    const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
+    const startPick = firstLineIsFare && dLabelIdx > 1 ? 1 : 0;
+    const pick = lines.slice(startPick, dLabelIdx).join(' | ');
+    const drop = lines.slice(dLabelIdx).join(' | ');
+    return [normalize(pick), normalize(drop)];
+  }
+
+  // 3. Fallback: two address blocks ending with 6-digit PIN, ", India", or city+address
   const addrEndIdx = lines
     .map((line, i) => (line.length >= 16 && PIN_LINE_RE.test(line) ? i : -1))
     .filter((i) => i >= 0);
   if (addrEndIdx.length >= 2) {
     const splitAfterFirstAddr = addrEndIdx[0] + 1;
     if (splitAfterFirstAddr < lines.length) {
-      // Skip leading fare-only line like "₹41" or "Rs 41"
       const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
       const startPick = firstLineIsFare && splitAfterFirstAddr > 1 ? 1 : 0;
       const pick = lines.slice(startPick, splitAfterFirstAddr).join(' | ');
@@ -345,7 +343,7 @@ export function setMaxPickupKm(km: number): void {
 
 export function getAllowPickupWhenKmMissing(): boolean {
   const raw = localStorage.getItem(KEY_ALLOW_MISSING_KM);
-  // Default true so popups without KM (e.g. ₹41 Porter cards) still get picked up
+  // Default true so popups without KM still get picked up
   return raw !== 'false';
 }
 
@@ -361,6 +359,7 @@ export function extractDistanceKm(text: string): number | null {
     const unit = (match[2] ?? 'km').toLowerCase();
     const val = Number(rawNum);
     if (!Number.isFinite(val)) continue;
+    if (unit === 'm' && val < 15) continue;
     const km = unit.startsWith('m') ? val / 1000 : val;
 
     // Never treat Drop / Total / Trip / Fare distances as Pickup distance

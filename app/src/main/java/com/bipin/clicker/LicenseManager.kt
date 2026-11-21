@@ -215,10 +215,10 @@ object LicenseManager {
 
         val msg = buildString {
             append(
-                if (isHelp) "Namaste Sir, mujhe SwiftGate payment/app help chahiye."
+                if (isHelp) "Namaste Sir, mujhe SwiftGate app help chahiye."
                 else "Namaste Sir, SwiftGate approval chahiye."
             )
-            append("\nDevice ID: ").append(id)
+            append("\nDevice Code: ").append(id)
             if (extraInfo.isNotBlank()) {
                 append("\n").append(extraInfo)
             }
@@ -581,10 +581,10 @@ object LicenseManager {
                 if (active && exp > 0L) {
                     applyServerLicense(app, exp, srvMs)
                     lastError = ""
-                    debugInfo = "UPI Server OK | ID $id active (${fmtIst(exp)})"
+                    debugInfo = "Server OK | ID $id active (${fmtIst(exp)})"
                     return
                 }
-                info.append("UPI OK(0) | ")
+                info.append("Server OK(0) | ")
             } catch (_: Exception) {
             }
         }

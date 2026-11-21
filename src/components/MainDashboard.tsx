@@ -60,8 +60,12 @@ const SAMPLE_ORDERS: { label: string; text: string }[] = [
     text: 'Hauz Khas, New Delhi 110017 (0.9 km) | Greater Noida Alpha 1 (24.5 km) | Accept in 7s',
   },
   {
-    label: 'Porter ₹41 Popup (No KM Shown)',
-    text: '₹41 | Sector 10A | 153, Housing Board Colony, Sector 10A, Gurugram, Haryana 122001, India | Sector 10A | 153, Housing Board Colony, Sector 10A, Gurugram, Haryana 122001, India | Accept in 5s',
+    label: 'Live Order Video Card (Sec 34 -> Sec 52)',
+    text: '₹96 | PICKUP | Sector 34 (2.9 km) | A-17, Info Technology Park, Sector 34, Gurugram, Haryana 122004, India | DROP | Sector 52 (6.9 km) | 237sp, Indira Colony, Indira Colony 1, Sector 52, Gurugram, Haryana 122003, India | Accept in 9s',
+  },
+  {
+    label: 'Porter Popup (No KM Shown)',
+    text: 'Sector 10A | 153, Housing Board Colony, Sector 10A, Gurugram, Haryana 122001, India | Sector 10A | 153, Housing Board Colony, Sector 10A, Gurugram, Haryana 122001, India | Accept in 5s',
   },
   {
     label: 'Pickup 600 m (KM Filter Test)',

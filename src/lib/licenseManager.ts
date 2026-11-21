@@ -161,7 +161,7 @@ export async function refreshLicenseAsync(): Promise<LicenseState> {
   if (serverExpiry > 0) {
     localStorage.setItem(K_EXPIRY, String(serverExpiry));
     lastError = '';
-    debugInfo = `UPI Server OK | ID ${id} mili (${formatRemainingText(serverExpiry)})`;
+    debugInfo = `Server OK | ID ${id} mili (${formatRemainingText(serverExpiry)})`;
     return getLicenseState();
   }
 
@@ -337,6 +337,23 @@ export async function adminConfirmOrder(token: string, orderId: string, utr?: st
   });
   const data = (await res.json()) as { error?: string };
   if (!res.ok) throw new Error(data.error || 'Confirm fail');
+}
+
+export async function adminGrantDevice(
+  token: string,
+  deviceId: string,
+  days: number
+): Promise<void> {
+  const res = await fetch('/api/admin/licenses/grant', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ deviceId, days }),
+  });
+  const data = (await res.json()) as { error?: string };
+  if (!res.ok) throw new Error(data.error || 'Approve nahi ho paya');
 }
 
 export async function adminRevokeDevice(token: string, deviceId: string): Promise<void> {

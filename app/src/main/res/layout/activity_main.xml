@@ -242,13 +242,6 @@
             android:layout_marginTop="8dp"
             android:text="Screen Watcher ON Karein" />
 
-        <Button
-            android:id="@+id/btnOwnerAutoApprove"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Owner Paytm Auto-Approve Setup" />
-
         </LinearLayout>
 
     </LinearLayout>

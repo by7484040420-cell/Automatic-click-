@@ -61,7 +61,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Pickup Max Distance (KM) — agar location nahi pata ho to kitne km tak uthana hai:"
+            android:text="Pickup Max Distance (KM) — order card par Pickup ke aage likha (2.9 km) padhta hai:"
             android:textColor="#81C784"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -72,7 +72,7 @@
             android:layout_height="44dp"
             android:layout_marginTop="6dp"
             android:background="#2A2A2A"
-            android:hint="Jaise: 0.5, 0.6 ya 2 (khaali = off)"
+            android:hint="Jaise: 2, 3 ya 3.5 (khaali = off)"
             android:inputType="numberDecimal"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
@@ -190,7 +190,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="Popup par KM na likha ho (jaise ₹41 wala card) to bhi Drop match par uthaye"
+            android:text="Agar order card par Pickup ke aage KM na likha ho to bhi Drop match par uthaye"
             android:textColor="#E0E0E0"
             android:textSize="12sp" />
     </LinearLayout>

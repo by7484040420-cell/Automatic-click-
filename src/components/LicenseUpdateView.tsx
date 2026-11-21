@@ -1,40 +1,28 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import jsQR from 'jsqr';
 import {
   CheckCircle2,
   Copy,
   ExternalLink,
   KeyRound,
   Lock,
-  QrCode,
   RefreshCw,
   Settings2,
   Share2,
   ShieldCheck,
   ShieldOff,
-  Smartphone,
-  Sparkles,
   Trash2,
-  Upload,
 } from 'lucide-react';
 import {
-  adminConfirmOrder,
+  adminGrantDevice,
   adminRevokeDevice,
-  applyLicenseExpiry,
   claimAdminPassword,
-  createPaymentOrder,
   fetchAdminDashboard,
-  fetchPublicPlans,
   getAdminAuthState,
   loginAdmin,
-  pollPaymentOrderStatus,
   refreshLicenseAsync,
-  rotateMerchantWebhookSecret,
   setCustomDeviceId,
   setPreviewUnlocked,
-  updateAdminBusinessConfig,
 } from '../lib/licenseManager';
-import { playOrderSound } from '../lib/soundPlayer';
 import {
   CURRENT_VERSION_NAME,
   checkForUpdate,
@@ -43,9 +31,6 @@ import {
 import type {
   AdminDashboardData,
   LicenseState,
-  PaymentOrderData,
-  PublicPlansInfo,
-  SubscriptionPlan,
   UpdateInfo,
 } from '../types';
 
@@ -58,64 +43,16 @@ interface LicenseUpdateViewProps {
   onEnterApp: () => void;
 }
 
-function isSafeUpiUri(uri: string): boolean {
-  return uri.trim().toLowerCase().startsWith('upi://pay?');
-}
+const OWNER_WHATSAPP_WA = '918383872065';
+const OWNER_WHATSAPP_DISPLAY = '8383872065';
 
-function formatInr(amount: number): string {
-  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
-}
-
-function formatCountdown(expiresAt: number): string {
-  const sec = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-async function decodeUpiQrFromImageFile(file: File): Promise<{ upiVpa: string; businessName?: string }> {
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error('Photo load nahi ho paya'));
-      el.src = objectUrl;
-    });
-
-    const maxDim = 1024;
-    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
-    const width = Math.max(1, Math.round(img.naturalWidth * scale));
-    const height = Math.max(1, Math.round(img.naturalHeight * scale));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas unavailable');
-    ctx.drawImage(img, 0, 0, width, height);
-    const imgData = ctx.getImageData(0, 0, width, height);
-
-    const decoded = jsQR(imgData.data, width, height, { inversionAttempts: 'attemptBoth' });
-    if (!decoded || !decoded.data) {
-      throw new Error('QR code scan nahi hua — saaf QR photo chunein ya UPI ID likhein');
-    }
-
-    const raw = decoded.data.trim();
-    if (!raw.toLowerCase().startsWith('upi://pay?')) {
-      throw new Error('Ye Paytm/UPI payment QR nahi lag raha');
-    }
-    const qs = new URLSearchParams(raw.slice(raw.indexOf('?') + 1));
-    const pa = (qs.get('pa') || '').trim();
-    const pn = (qs.get('pn') || '').trim();
-    if (!pa || !pa.includes('@')) {
-      throw new Error('QR me UPI ID (pa) nahi mili');
-    }
-    return { upiVpa: pa, businessName: pn || undefined };
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
+const DURATION_OPTIONS = [
+  { label: '1 Day', days: 1 },
+  { label: '7 Days', days: 7 },
+  { label: '15 Days', days: 15 },
+  { label: '30 Days', days: 30 },
+  { label: 'Unlimited', days: 0 },
+];
 
 export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
   license,
@@ -130,16 +67,7 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
   const [updateStatusMsg, setUpdateStatusMsg] = useState('');
   const [customIdInput, setCustomIdInput] = useState(license.deviceId);
 
-  // Instant UPI Scanner state
-  const [plansInfo, setPlansInfo] = useState<PublicPlansInfo | null>(null);
-  const [selectedPlanId, setSelectedPlanId] = useState<string>('plan_7d');
-  const [creatingOrder, setCreatingOrder] = useState(false);
-  const [activeOrder, setActiveOrder] = useState<PaymentOrderData | null>(null);
-  const [orderPaidMsg, setOrderPaidMsg] = useState<string>('');
-  const [countdownText, setCountdownText] = useState<string>('');
-  const [paymentError, setPaymentError] = useState<string>('');
-
-  // Owner / Admin Auth & Business UPI Config state (token strictly in JS memory, NEVER localStorage)
+  // Owner Manual Approval Panel state (token strictly in JS memory)
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [authState, setAuthState] = useState<{
@@ -150,68 +78,9 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
   const [passInput, setPassInput] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [adminDash, setAdminDash] = useState<AdminDashboardData | null>(null);
-  const [editBizName, setEditBizName] = useState('');
-  const [editBizUpi, setEditBizUpi] = useState('');
-  const [editPlans, setEditPlans] = useState<SubscriptionPlan[]>([]);
-  const [savingAdmin, setSavingAdmin] = useState(false);
-  const [newWebhookSecret, setNewWebhookSecret] = useState<string>('');
-  const [qrScanNotice, setQrScanNotice] = useState<string>('');
-  const [scanningQrFile, setScanningQrFile] = useState(false);
-
-  const loadPlans = useCallback(async () => {
-    try {
-      const info = await fetchPublicPlans();
-      setPlansInfo(info);
-      if (info.plans.length > 0 && !info.plans.some((p) => p.id === selectedPlanId)) {
-        setSelectedPlanId(info.plans[0].id);
-      }
-    } catch {
-      // Backend optional offline guard
-    }
-  }, [selectedPlanId]);
-
-  useEffect(() => {
-    void loadPlans();
-  }, [loadPlans]);
-
-  // 1-second auto-approval polling while a UPI QR order is PENDING
-  useEffect(() => {
-    if (!activeOrder || activeOrder.status !== 'PENDING') return;
-
-    setCountdownText(formatCountdown(activeOrder.expiresAt));
-    const tickTimer = window.setInterval(() => {
-      setCountdownText(formatCountdown(activeOrder.expiresAt));
-    }, 1000);
-
-    const pollTimer = window.setInterval(async () => {
-      try {
-        const res = await pollPaymentOrderStatus(activeOrder.orderId);
-        if (res.status === 'PAID' || res.licenseActive) {
-          window.clearInterval(pollTimer);
-          window.clearInterval(tickTimer);
-          setActiveOrder((prev) => (prev ? { ...prev, status: 'PAID' } : null));
-          const updated = applyLicenseExpiry(res.licenseExpiryMs);
-          onLicenseChange(updated);
-          playOrderSound();
-          setOrderPaidMsg(
-            `Payment Verified (${res.planName})! Approval turant active ho gaya.`
-          );
-          onNotify('Payment Verified! 1 second me approval active ho gaya');
-        } else if (res.status === 'EXPIRED') {
-          window.clearInterval(pollTimer);
-          window.clearInterval(tickTimer);
-          setActiveOrder((prev) => (prev ? { ...prev, status: 'EXPIRED' } : null));
-        }
-      } catch {
-        // Retry next second silently
-      }
-    }, 1000);
-
-    return () => {
-      window.clearInterval(pollTimer);
-      window.clearInterval(tickTimer);
-    };
-  }, [activeOrder, onLicenseChange, onNotify]);
+  const [grantDeviceInput, setGrantDeviceInput] = useState('');
+  const [grantDays, setGrantDays] = useState<number>(7);
+  const [grantBusy, setGrantBusy] = useState(false);
 
   const loadAdminState = useCallback(
     async (tok: string | null) => {
@@ -221,9 +90,6 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
         if (tok && state.authenticated) {
           const dash = await fetchAdminDashboard(tok);
           setAdminDash(dash);
-          setEditBizName(dash.config.businessName);
-          setEditBizUpi(dash.config.businessUpiVpa);
-          setEditPlans(dash.plans);
         }
       } catch (err) {
         onNotify(err instanceof Error ? err.message : 'Admin panel load nahi hua');
@@ -241,13 +107,11 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
   const handleCopyId = async () => {
     try {
       await navigator.clipboard.writeText(license.deviceId);
-      onNotify('ID copy ho gayi');
+      onNotify('Code copy ho gaya');
     } catch {
-      onNotify(`Device ID: ${license.deviceId}`);
+      onNotify(`Device Code: ${license.deviceId}`);
     }
   };
-
-  const OWNER_WHATSAPP_WA = '918383872065';
 
   const openOwnerWhatsApp = async (mode: 'approval' | 'help') => {
     try {
@@ -255,26 +119,20 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
     } catch {
       // Ignore clipboard permission failure
     }
-    const orderPart =
-      activeOrder && activeOrder.status === 'PENDING'
-        ? ` | Plan: ${activeOrder.plan.name} (₹${formatInr(activeOrder.amountInr)}, Ref: ${activeOrder.orderId})`
-        : '';
     const text =
       mode === 'help'
-        ? `Namaste Sir, mujhe SwiftGate payment / app help chahiye.\nDevice ID: ${license.deviceId}${orderPart}`
-        : `Namaste Sir, SwiftGate approval chahiye.\nDevice ID: ${license.deviceId}${orderPart}`;
+        ? `Namaste Sir, mujhe SwiftGate app help chahiye.\nDevice Code: ${license.deviceId}`
+        : `Namaste Sir, SwiftGate approval chahiye.\nDevice Code: ${license.deviceId}`;
 
-    onNotify(`ID copy ho gayi (${license.deviceId}) — WhatsApp (8383872065) khul raha hai`);
+    onNotify(
+      `Code copy ho gaya (${license.deviceId}) — WhatsApp (${OWNER_WHATSAPP_DISPLAY}) khul raha hai`
+    );
     const url = `https://wa.me/${OWNER_WHATSAPP_WA}?text=${encodeURIComponent(text)}`;
     const link = document.createElement('a');
     link.href = url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.click();
-  };
-
-  const handleShareWhatsApp = async () => {
-    await openOwnerWhatsApp('approval');
   };
 
   const handleCheckApproval = async () => {
@@ -287,7 +145,7 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
     } else if (next.lastError) {
       onNotify(next.lastError);
     } else {
-      onNotify('Is Device ID par abhi approval nahi mila');
+      onNotify('Is Device Code par abhi approval nahi mila');
     }
   };
 
@@ -309,25 +167,8 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
     onNotify(
       nextUnlocked
         ? 'Web Preview Mode unlocked'
-        : 'Approval Gate locked — ab UPI Payment / Approval ke baad hi app khulega'
+        : 'Approval Gate locked — ab approval ke baad hi app khulega'
     );
-  };
-
-  const handleGenerateQr = async (planId: string) => {
-    setSelectedPlanId(planId);
-    setPaymentError('');
-    setOrderPaidMsg('');
-    setCreatingOrder(true);
-    try {
-      const order = await createPaymentOrder(license.deviceId, planId);
-      setActiveOrder(order);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'QR generate nahi ho paya';
-      setPaymentError(msg);
-      onNotify(msg);
-    } finally {
-      setCreatingOrder(false);
-    }
   };
 
   const handleAdminAuthSubmit = async (e: React.FormEvent) => {
@@ -341,7 +182,7 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
       setAdminToken(res.token);
       setPassInput('');
       await loadAdminState(res.token);
-      onNotify('Owner Business Panel unlocked');
+      onNotify('Owner Approval Panel unlocked');
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Auth fail');
     } finally {
@@ -349,70 +190,21 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
     }
   };
 
-  const handleSaveBusinessConfig = async (e: React.FormEvent) => {
+  const handleGrantDeviceAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adminToken) return;
-    setSavingAdmin(true);
+    const cleanCode = grantDeviceInput.trim().toUpperCase();
+    if (!cleanCode) return;
+    setGrantBusy(true);
     try {
-      await updateAdminBusinessConfig(adminToken, {
-        businessName: editBizName,
-        businessUpiVpa: editBizUpi,
-        plans: editPlans,
-      });
+      await adminGrantDevice(adminToken, cleanCode, grantDays);
+      setGrantDeviceInput('');
       await loadAdminState(adminToken);
-      await loadPlans();
-      onNotify('Business UPI Scanner & Plans save ho gaye!');
-    } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Save fail');
-    } finally {
-      setSavingAdmin(false);
-    }
-  };
-
-  const handleRotateWebhookSecret = async () => {
-    if (!adminToken) return;
-    try {
-      const res = await rotateMerchantWebhookSecret(adminToken);
-      setNewWebhookSecret(res.webhookSecret);
-      await loadAdminState(adminToken);
-      onNotify('Naya Auto-Webhook Secret ban gaya — copy karke rakhein');
-    } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Secret generate fail');
-    }
-  };
-
-  const handleQrPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    setScanningQrFile(true);
-    setQrScanNotice('');
-    try {
-      const parsed = await decodeUpiQrFromImageFile(file);
-      setEditBizUpi(parsed.upiVpa);
-      if (parsed.businessName) {
-        setEditBizName(parsed.businessName);
-      }
-      const msg = `Paytm QR se UPI ID mil gaya: ${parsed.upiVpa} — neeche "Save Karein" button dabayein`;
-      setQrScanNotice(msg);
-      onNotify(`QR se UPI ID mil gaya: ${parsed.upiVpa}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'QR scan fail';
-      setQrScanNotice(msg);
-      onNotify(msg);
-    } finally {
-      setScanningQrFile(false);
-    }
-  };
-
-  const handleConfirmOrderAdmin = async (orderId: string) => {
-    if (!adminToken) return;
-    try {
-      await adminConfirmOrder(adminToken, orderId);
-      await loadAdminState(adminToken);
-      onNotify(`Order ${orderId} approve ho gaya!`);
+      onNotify(`${cleanCode} ko approval de diya gaya!`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Approve fail');
+    } finally {
+      setGrantBusy(false);
     }
   };
 
@@ -435,19 +227,16 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
     setCheckingUpdate(false);
   };
 
-  const qrImageSrc = activeOrder?.qrDataUrl || activeOrder?.razorpayQrImageUrl || '';
-  const webhookUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/api/payments/merchant-webhook` : '';
-
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-white">
-            {license.isActive ? 'Instant UPI Approval & Updates' : 'Approval Zaroori Hai'}
+            {license.isActive ? 'Approval & Updates' : 'Approval Zaroori Hai'}
           </h1>
           <p className="mt-1 text-sm text-[#9E9E9E]">
-            Business UPI QR scan karke pay karein — payment aate hi 1 second me automatic approval milega.
+            Apna Device Code WhatsApp par bhejein ({OWNER_WHATSAPP_DISPLAY}) — approval milne ke
+            baad "Approval Check Karein" dabayein.
           </p>
         </div>
 
@@ -457,181 +246,24 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
           className="flex min-h-[40px] items-center gap-2 rounded-xl border border-white/15 bg-[#1E1E1E] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#2A2A2A]"
         >
           <Settings2 className="h-4 w-4 text-[#81C784]" />
-          <span>{adminOpen ? 'Owner Panel Band Karein' : 'Owner Business UPI Setup'}</span>
+          <span>{adminOpen ? 'Owner Panel Band Karein' : 'Owner Approval Panel'}</span>
         </button>
       </div>
 
-      {/* Instant Business UPI Payment & QR Scanner Card */}
-      <div className="mb-6 rounded-2xl border border-[#43A047]/35 bg-[#1E1E1E] p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#43A047]/20 text-[#81C784]">
-              <QrCode className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="font-display text-lg font-bold text-white">
-                Instant UPI Scanner (1-Sec Auto Approval)
-              </h2>
-              <p className="text-xs text-[#B0BEC5]">
-                {plansInfo?.businessName || 'SwiftGate Business'}{' '}
-                {plansInfo?.razorpayEnabled
-                  ? '· Official Razorpay UPI Gateway Active'
-                  : plansInfo?.businessUpiConfigured
-                    ? `· UPI: ${plansInfo.businessUpiVpa}`
-                    : '· Owner Panel me Business UPI ID set karein'}
-              </p>
-            </div>
-          </div>
-
-          {plansInfo?.instantAutoApproveReady && (
-            <span className="inline-flex items-center gap-1 rounded-lg bg-[#235F37]/60 px-2.5 py-1 text-[11px] font-semibold text-[#5AD278]">
-              <Sparkles className="h-3.5 w-3.5" />
-              Auto-Approve Live
-            </span>
-          )}
-        </div>
-
-        {orderPaidMsg && (
-          <div className="mt-4 flex items-center gap-2.5 rounded-xl border border-[#5AD278]/40 bg-[#235F37]/40 p-3.5 text-sm font-semibold text-[#5AD278]">
-            <CheckCircle2 className="h-5 w-5 shrink-0" />
-            <span>{orderPaidMsg}</span>
-          </div>
-        )}
-
-        {/* Subscription Plans Grid */}
-        <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-          {(plansInfo?.plans || []).map((plan) => {
-            const isSelected = selectedPlanId === plan.id && activeOrder?.plan.id === plan.id;
-            return (
-              <button
-                key={plan.id}
-                type="button"
-                disabled={creatingOrder}
-                onClick={() => void handleGenerateQr(plan.id)}
-                className={`relative flex flex-col items-start rounded-xl border p-3.5 text-left transition-colors ${
-                  isSelected
-                    ? 'border-[#43A047] bg-[#235F37]/40'
-                    : 'border-white/10 bg-[#141414] hover:border-white/25 hover:bg-[#252525]'
-                }`}
-              >
-                {plan.badge && (
-                  <span className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#FFB74D]">
-                    {plan.badge}
-                  </span>
-                )}
-                <span className="text-xs font-semibold text-[#E0E0E0]">{plan.name}</span>
-                <span className="font-mono-tabular mt-1 text-xl font-bold text-white">
-                  ₹{plan.priceInr}
-                </span>
-                <span className="mt-1 text-[11px] font-medium text-[#81C784]">
-                  Pay & Unlock →
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {paymentError && (
-          <div className="mt-4 rounded-xl border border-[#EF5350]/30 bg-[#C62828]/15 p-3 text-xs text-[#EF9A9A]">
-            {paymentError}
-          </div>
-        )}
-
-        {/* Active QR Display & 1-second Live Verification */}
-        {activeOrder && activeOrder.status === 'PENDING' && (
-          <div className="mt-5 rounded-xl border border-white/10 bg-[#141414] p-5">
-            <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-start">
-              <div className="flex flex-col items-center rounded-2xl bg-white p-3 shadow-lg">
-                {qrImageSrc ? (
-                  <img
-                    src={qrImageSrc}
-                    alt={`UPI QR for ${activeOrder.orderId}`}
-                    className="h-52 w-52 object-contain"
-                  />
-                ) : (
-                  <div className="flex h-52 w-52 items-center justify-center text-xs text-black">
-                    QR Loading...
-                  </div>
-                )}
-                <span className="font-mono-tabular mt-2 text-xs font-bold text-[#121212]">
-                  ₹{formatInr(activeOrder.amountInr)} · Ref {activeOrder.orderId}
-                </span>
-              </div>
-
-              <div className="flex-1 text-center sm:text-left">
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#81C784]">
-                  Kisi bhi UPI App se Scan ya Pay karein
-                </p>
-                <h3 className="mt-1 font-display text-lg font-bold text-white">
-                  {activeOrder.plan.name} — ₹{formatInr(activeOrder.amountInr)}
-                </h3>
-                <p className="mt-1 text-xs text-[#B0BEC5]">
-                  Device ID:{' '}
-                  <span className="font-mono-tabular font-semibold text-white">
-                    {activeOrder.deviceId}
-                  </span>{' '}
-                  · Valid:{' '}
-                  <span className="font-mono-tabular text-[#FFB74D]">{countdownText}</span>
-                </p>
-
-                <div className="mt-4 flex flex-wrap justify-center gap-2.5 sm:justify-start">
-                  {isSafeUpiUri(activeOrder.upiUri) && (
-                    <a
-                      href={activeOrder.upiUri}
-                      className="flex min-h-[44px] items-center gap-2 rounded-xl bg-[#43A047] px-4 py-2.5 text-xs font-bold text-white hover:bg-[#388E3C]"
-                    >
-                      <Smartphone className="h-4 w-4" />
-                      <span>PhonePe / GPay / Paytm Kholo</span>
-                    </a>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void handleGenerateQr(activeOrder.plan.id)}
-                    className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-[#2A2A2A] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#363636]"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    <span>Naya QR</span>
-                  </button>
-                </div>
-
-                <div className="mt-4 flex items-center justify-center gap-2 text-xs text-[#81C784] sm:justify-start">
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  <span>
-                    Har 1 second me payment check ho raha hai — payment hote hi app khud open ho jayega
-                  </span>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-                  <button
-                    type="button"
-                    onClick={() => void openOwnerWhatsApp('help')}
-                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-white/15 bg-[#1E1E1E] px-3 py-1.5 text-xs font-semibold text-[#E0E0E0] hover:bg-[#2A2A2A]"
-                  >
-                    <Share2 className="h-3.5 w-3.5 text-[#5AD278]" />
-                    <span>Payment / Net Dikat? WhatsApp Help (8383872065)</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Collapsible Owner Business Account & Webhook Admin Panel */}
+      {/* Collapsible Owner Manual Approval Panel */}
       {adminOpen && (
         <div className="mb-6 rounded-2xl border border-[#FFB74D]/35 bg-[#1A1A1A] p-6">
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5 text-[#FFB74D]" />
-            <h2 className="font-display text-lg font-bold text-white">
-              Owner Business Account & Auto-Approve Settings
-            </h2>
+            <h2 className="font-display text-lg font-bold text-white">Owner Approval Panel</h2>
           </div>
 
           {!adminToken || !adminDash ? (
             <form onSubmit={handleAdminAuthSubmit} className="mt-4 space-y-3">
               <p className="text-xs text-[#B0BEC5]">
                 {authState?.canClaimFirstRun
-                  ? 'First-run setup: Apna Owner Admin Password banayein (kam se kam 6 characters) taaki aap apna Business UPI ID aur plans save kar sakein.'
-                  : 'Apna Owner Admin Passcode daalkar Business UPI account settings kholein.'}
+                  ? 'First-run setup: Apna Owner Admin Password banayein (kam se kam 6 characters).'
+                  : 'Apna Owner Admin Passcode daalkar device approval panel kholein.'}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <input
@@ -662,237 +294,41 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
               </div>
             </form>
           ) : (
-            <div className="mt-5 space-y-6">
-              {/* Business UPI VPA & Plans Form */}
-              <form onSubmit={handleSaveBusinessConfig} className="space-y-4">
-                <div className="rounded-xl border border-[#43A047]/35 bg-[#141414] p-3.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2.5">
-                    <div>
-                      <p className="text-xs font-bold text-[#81C784]">
-                        Paytm Business Scanner Photo Se Direct UPI ID Nikalein
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-[#9E9E9E]">
-                        Apne Paytm for Business QR sticker ki photo/screenshot upload karein — UPI ID khud bhar jayegi.
-                      </p>
-                    </div>
-                    <label className="inline-flex min-h-[38px] cursor-pointer items-center gap-2 rounded-lg bg-[#235F37] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#2E7D32]">
-                      <Upload className="h-3.5 w-3.5" />
-                      <span>{scanningQrFile ? 'Scanning QR...' : 'Paytm QR Photo Upload'}</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleQrPhotoUpload}
-                        className="sr-only"
-                        disabled={scanningQrFile}
-                      />
-                    </label>
-                  </div>
-                  {qrScanNotice && (
-                    <p className="mt-2 text-xs font-medium text-[#FFB74D]">{qrScanNotice}</p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-[#B0BEC5]">
-                      Business / Dukaan ka Naam
-                    </label>
-                    <input
-                      type="text"
-                      value={editBizName}
-                      onChange={(e) => setEditBizName(e.target.value)}
-                      placeholder="SwiftGate Auto-Accept"
-                      className="h-10 w-full rounded-lg border border-white/15 bg-[#2A2A2A] px-3 text-sm text-white focus:border-[#43A047] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-[#B0BEC5]">
-                      Paytm Business UPI ID (QR upload karein ya type karein)
-                    </label>
-                    <input
-                      type="text"
-                      value={editBizUpi}
-                      onChange={(e) => setEditBizUpi(e.target.value)}
-                      placeholder="jaise: paytmqr...@paytm ya name@okaxis"
-                      className="font-mono-tabular h-10 w-full rounded-lg border border-white/15 bg-[#2A2A2A] px-3 text-sm text-white focus:border-[#43A047] focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-xs font-semibold text-[#B0BEC5]">
-                    Plans & Rates (₹)
-                  </label>
-                  <div className="space-y-2">
-                    {editPlans.map((plan, idx) => (
-                      <div
-                        key={plan.id}
-                        className="grid grid-cols-3 gap-2 rounded-lg bg-[#141414] p-2.5"
-                      >
-                        <input
-                          type="text"
-                          value={plan.name}
-                          onChange={(e) =>
-                            setEditPlans((prev) =>
-                              prev.map((p, i) => (i === idx ? { ...p, name: e.target.value } : p))
-                            )
-                          }
-                          className="h-9 rounded bg-[#2A2A2A] px-2.5 text-xs text-white"
-                          placeholder="Plan name"
-                        />
-                        <input
-                          type="number"
-                          value={plan.durationHours}
-                          min={0}
-                          onChange={(e) =>
-                            setEditPlans((prev) =>
-                              prev.map((p, i) =>
-                                i === idx ? { ...p, durationHours: Number(e.target.value) } : p
-                              )
-                            )
-                          }
-                          className="font-mono-tabular h-9 rounded bg-[#2A2A2A] px-2.5 text-xs text-white"
-                          title="Hours (0 = Lifetime)"
-                          placeholder="Hours (0=Life)"
-                        />
-                        <input
-                          type="number"
-                          value={plan.priceInr}
-                          min={1}
-                          onChange={(e) =>
-                            setEditPlans((prev) =>
-                              prev.map((p, i) =>
-                                i === idx ? { ...p, priceInr: Number(e.target.value) } : p
-                              )
-                            )
-                          }
-                          className="font-mono-tabular h-9 rounded bg-[#2A2A2A] px-2.5 text-xs text-white"
-                          placeholder="Price ₹"
-                        />
-                      </div>
+            <div className="mt-5 space-y-5">
+              <form onSubmit={handleGrantDeviceAdmin} className="space-y-3">
+                <p className="text-xs text-[#B0BEC5]">
+                  WhatsApp par aaya hua rider ka Device Code yahan daalein aur time select karke Approve karein:
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    type="text"
+                    value={grantDeviceInput}
+                    onChange={(e) => setGrantDeviceInput(e.target.value.toUpperCase())}
+                    placeholder="Device Code daalein (jaise E5E0BAE1AA80)"
+                    className="font-mono-tabular h-11 flex-1 rounded-xl border border-white/15 bg-[#2A2A2A] px-3.5 text-sm text-white focus:border-[#43A047] focus:outline-none"
+                  />
+                  <select
+                    value={grantDays}
+                    onChange={(e) => setGrantDays(Number(e.target.value))}
+                    className="h-11 rounded-xl border border-white/15 bg-[#2A2A2A] px-3 text-sm text-white focus:border-[#43A047] focus:outline-none"
+                  >
+                    {DURATION_OPTIONS.map((opt) => (
+                      <option key={opt.days} value={opt.days}>
+                        {opt.label}
+                      </option>
                     ))}
-                  </div>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={grantBusy}
+                    className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#43A047] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#388E3C] disabled:opacity-60"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>{grantBusy ? 'Approving...' : 'Approve Karein'}</span>
+                  </button>
                 </div>
-
-                <button
-                  type="submit"
-                  disabled={savingAdmin}
-                  className="min-h-[42px] rounded-xl bg-[#43A047] px-5 py-2 text-xs font-bold text-white hover:bg-[#388E3C]"
-                >
-                  {savingAdmin ? 'Saving...' : 'Business UPI & Plans Save Karein'}
-                </button>
               </form>
 
-              {/* 1-Second Auto-Approval Webhook Info */}
-              <div className="rounded-xl border border-white/10 bg-[#141414] p-4 text-xs">
-                <p className="font-bold text-white">1-Second Zero-Touch Auto-Approval Status</p>
-                <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  <p className="text-[#B0BEC5]">
-                    Razorpay API Keys:{' '}
-                    <span
-                      className={
-                        adminDash.integrations.razorpayConfigured ? 'text-[#5AD278]' : 'text-[#FFB74D]'
-                      }
-                    >
-                      {adminDash.integrations.razorpayConfigured ? 'CONNECTED' : 'Not Set in Secrets'}
-                    </span>
-                  </p>
-                  <p className="text-[#B0BEC5]">
-                    GitHub Auto-Sync:{' '}
-                    <span
-                      className={
-                        adminDash.integrations.githubTokenConfigured
-                          ? 'text-[#5AD278]'
-                          : 'text-[#9E9E9E]'
-                      }
-                    >
-                      {adminDash.integrations.githubTokenConfigured ? 'ACTIVE' : 'Optional (Not Set)'}
-                    </span>
-                  </p>
-                </div>
-
-                <div className="mt-3 border-t border-white/10 pt-3">
-                  <p className="font-semibold text-[#81C784]">
-                    Sirf Paytm for Business Scanner se 1-Second Auto-Approve (0% Fee):
-                  </p>
-                  <p className="mt-1 text-[#9E9E9E]">
-                    Aapka Paytm QR (<span className="font-mono-tabular text-white">{editBizUpi || 'paytmqr5i4hko@ptys'}</span>) pehle se set hai. Auto-approve chalu karne ke liye apne Paytm Business wale phone me SwiftGate app kholein → Approval screen par neeche{' '}
-                    <span className="font-semibold text-white">Owner Paytm Auto-Approve Setup</span>{' '}
-                    me bas apna yahi Owner Passcode daalkar{' '}
-                    <span className="font-semibold text-white">Auto-Connect</span> dabayein aur Notification Access ON kar dein — kuch copy-paste karne ki zaroorat nahi!
-                  </p>
-                  <p className="font-mono-tabular mt-2 select-all break-all rounded bg-[#1E1E1E] p-2 text-[11px] text-white">
-                    POST {webhookUrl}
-                  </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleRotateWebhookSecret()}
-                      className="rounded-lg bg-[#2A2A2A] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#363636]"
-                    >
-                      {adminDash.integrations.merchantWebhookKeySet
-                        ? 'Webhook Secret Rotate Karein'
-                        : 'Webhook Secret Generate Karein'}
-                    </button>
-                    {newWebhookSecret && (
-                      <span className="font-mono-tabular select-all rounded bg-[#235F37]/50 px-2.5 py-1 text-[11px] text-[#5AD278]">
-                        x-webhook-secret: {newWebhookSecret}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Recent Orders & One-Click Confirm */}
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-[#B0BEC5]">
-                  Recent UPI Orders ({adminDash.orders.length})
-                </h3>
-                <div className="mt-2 max-h-60 space-y-2 overflow-y-auto pr-1">
-                  {adminDash.orders.length === 0 && (
-                    <p className="text-xs text-[#9E9E9E]">Abhi koi payment order nahi bana hai.</p>
-                  )}
-                  {adminDash.orders.map((ord) => (
-                    <div
-                      key={ord.orderId}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#141414] px-3 py-2 text-xs"
-                    >
-                      <div>
-                        <span className="font-mono-tabular font-bold text-white">{ord.orderId}</span>{' '}
-                        · <span className="font-mono-tabular text-[#81C784]">{ord.deviceId}</span> ·{' '}
-                        <span className="text-white">₹{formatInr(ord.amountInr)}</span> ({ord.planName})
-                        {ord.utr && (
-                          <span className="ml-2 text-[11px] text-[#9E9E9E]">UTR: {ord.utr}</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`rounded px-2 py-0.5 text-[10px] font-bold ${
-                            ord.status === 'PAID'
-                              ? 'bg-[#235F37]/60 text-[#5AD278]'
-                              : ord.status === 'EXPIRED'
-                                ? 'bg-[#C62828]/30 text-[#EF5350]'
-                                : 'bg-[#FFB74D]/20 text-[#FFB74D]'
-                          }`}
-                        >
-                          {ord.status}
-                        </span>
-                        {ord.status === 'PENDING' && (
-                          <button
-                            type="button"
-                            onClick={() => void handleConfirmOrderAdmin(ord.orderId)}
-                            className="rounded bg-[#43A047] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#388E3C]"
-                          >
-                            Verify & Approve
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Active Licenses */}
               {adminDash.licenses.length > 0 && (
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider text-[#B0BEC5]">
@@ -926,10 +362,10 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
         </div>
       )}
 
-      {/* Existing Device ID & Manual/GitHub License Card */}
+      {/* Device Code & WhatsApp Approval Card */}
       <div className="rounded-2xl border border-white/10 bg-[#1E1E1E] p-6">
         <div className="text-center">
-          <p className="text-xs font-medium tracking-wide text-[#9E9E9E]">DEVICE ID</p>
+          <p className="text-xs font-medium tracking-wide text-[#9E9E9E]">AAPKA DEVICE CODE</p>
           <p className="font-mono-tabular mt-2 select-all text-3xl font-bold tracking-widest text-white">
             {license.deviceId}
           </p>
@@ -949,16 +385,16 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
             className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
           >
             <Copy className="h-4 w-4" />
-            <span>ID Copy Karein</span>
+            <span>Code Copy Karein</span>
           </button>
 
           <button
             type="button"
-            onClick={() => void handleShareWhatsApp()}
-            className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
+            onClick={() => void openOwnerWhatsApp('approval')}
+            className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#235F37] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#2E7D32]"
           >
             <Share2 className="h-4 w-4 text-[#5AD278]" />
-            <span>ID WhatsApp par Bhejein</span>
+            <span>WhatsApp par Bhejein ({OWNER_WHATSAPP_DISPLAY})</span>
           </button>
 
           <button
@@ -978,7 +414,7 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
           className="mt-3 flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-[#5AD278]/35 bg-[#235F37]/25 px-4 py-2 text-xs font-semibold text-[#81C784] hover:bg-[#235F37]/45"
         >
           <Share2 className="h-4 w-4" />
-          <span>Help / Approval Support — WhatsApp Chat (8383872065)</span>
+          <span>Help / Approval Support — WhatsApp ({OWNER_WHATSAPP_DISPLAY})</span>
         </button>
 
         {(license.lastError || license.debugInfo) && (
@@ -998,7 +434,7 @@ export const LicenseUpdateView: React.FC<LicenseUpdateViewProps> = ({
               value={customIdInput}
               onChange={(e) => setCustomIdInput(e.target.value.toUpperCase())}
               maxLength={12}
-              placeholder="Custom Device ID test karein"
+              placeholder="Custom Device Code test karein"
               className="font-mono-tabular h-10 flex-1 rounded-lg border border-white/10 bg-[#2A2A2A] px-3 text-sm text-white focus:border-[#43A047] focus:outline-none"
             />
             <button

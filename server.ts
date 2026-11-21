@@ -818,8 +818,11 @@ async function startServer(): Promise<void> {
     let amountNum = typeof body.amount === 'number' ? body.amount : Number(body.amount);
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
       const am = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i.exec(rawText);
+      const suffixAm = /([0-9,]+(?:\.[0-9]{1,2})?)\s*(?:rs\.?|inr|₹)/i.exec(rawText);
       if (am) {
         amountNum = Number(am[1].replace(/,/g, ''));
+      } else if (suffixAm) {
+        amountNum = Number(suffixAm[1].replace(/,/g, ''));
       } else if (/\b(?:received|credited|paid\s+you)\b/i.test(rawText)) {
         const bare = /\b([0-9,]+\.[0-9]{1,2})\b/.exec(rawText);
         amountNum = bare ? Number(bare[1].replace(/,/g, '')) : 0;
@@ -1088,6 +1091,42 @@ async function startServer(): Promise<void> {
     } catch (err) {
       res.status(409).json({ error: err instanceof Error ? err.message : 'Unable to confirm order' });
     }
+  });
+
+  app.post('/api/admin/licenses/grant', requireAdminAuth, (req: Request, res: Response) => {
+    const body = (req.body || {}) as { deviceId?: unknown; days?: unknown };
+    const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim().toUpperCase() : '';
+    if (!DEVICE_ID_RE.test(deviceId)) {
+      res.status(400).json({ error: 'Sahi Device Code daalein (6-24 letters/numbers)' });
+      return;
+    }
+    const daysNum = Number(body.days);
+    if (!Number.isFinite(daysNum) || daysNum < 0 || daysNum > 3650) {
+      res.status(400).json({ error: 'Sahi din (days) chunein' });
+      return;
+    }
+    const now = Date.now();
+    const isUnlimited = daysNum === 0;
+    const planName = isUnlimited ? 'Unlimited' : `${Math.round(daysNum)} Day${Math.round(daysNum) === 1 ? '' : 's'}`;
+    let expiryMs: number;
+    if (isUnlimited) {
+      expiryMs = Number.MAX_SAFE_INTEGER;
+    } else {
+      const existing = store.licenses[deviceId];
+      const base = existing && !existing.isUnlimited && existing.expiryMs > now ? existing.expiryMs : now;
+      expiryMs = base + Math.round(daysNum) * 24 * 60 * 60 * 1000;
+    }
+    const license: LicenseRecord = {
+      deviceId,
+      expiryMs,
+      isUnlimited,
+      planName,
+      updatedAt: now,
+    };
+    store.licenses[deviceId] = license;
+    saveStore();
+    void syncDeviceToGitHub(deviceId, expiryMs, planName);
+    res.json({ ok: true, license });
   });
 
   app.post('/api/admin/licenses/revoke', requireAdminAuth, (req: Request, res: Response) => {

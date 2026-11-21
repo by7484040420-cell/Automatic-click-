@@ -193,7 +193,7 @@ object AreaPrefs {
         prefs(context).edit().putFloat(KEY_MAX_PICKUP_KM, clean).apply()
     }
 
-    /** Popup par Pickup KM na likha ho (jaise ₹41 wala card) to bhi Drop match par uthaye (default true). */
+    /** Popup par Pickup KM na likha ho to bhi Drop match par uthaye (default true). */
     fun isAllowPickupWhenKmMissing(context: Context): Boolean =
         allowMissingKmCache ?: prefs(context).getBoolean(KEY_ALLOW_MISSING_KM, true).also {
             allowMissingKmCache = it
@@ -213,6 +213,7 @@ object AreaPrefs {
             val rawNum = m.groupValues.getOrNull(1)?.replace(',', '.') ?: continue
             val unit = m.groupValues.getOrNull(2)?.lowercase() ?: "km"
             val valNum = rawNum.toFloatOrNull() ?: continue
+            if (unit == "m" && valNum < 15f) continue
             val km = if (unit.startsWith("m")) valNum / 1000f else valNum
 
             // Kabhi bhi Drop / Total / Trip / Fare ki doori ko Pickup KM mat maano
@@ -337,9 +338,10 @@ object AreaPrefs {
     /**
      * "Accept in Ns" ke baad ka text peeche wali screen ka hota hai (galat match karata tha),
      * isliye wahin tak ka text lete hain.
-     * 1) Pehle explicit PICKUP / DROP markers par todte hain
-     * 2) Phir 2 leg-distance headers par (Total/Trip/Fare hamesha hata kar)
-     * 3) Phir 2 address blocks (6-digit PIN / India / city) par — jaise bina KM wala ₹41 popup
+     * 1) Pehle 2 leg-distance headers par todte hain (Sector 34 (2.9 km) / Sector 52 (6.9 km))
+     *    taaki vertical PICKUP/DROP label ki position se koi galti na ho
+     * 2) Phir explicit PICKUP / DROP markers par (agar card par KM na ho)
+     * 3) Phir 2 address blocks (6-digit PIN / India / city) par
      */
     private fun splitOrder(rawText: String): Pair<String, String> {
         var t = rawText
@@ -348,7 +350,27 @@ object AreaPrefs {
 
         val lines = t.split(LINE_SPLIT_RE).map { it.trim() }.filter { it.isNotEmpty() }
 
-        // 1. Explicit PICKUP / DROP marker lines
+        // 1. Distance headers (Total/Trip/Fare hamesha exclude) - vertical PICKUP/DROP order se surakshit
+        val legDistIdx = lines.indices.filter {
+            KM_HEADER.containsMatchIn(lines[it]) && !TOTAL_TRIP_TAG_RE.containsMatchIn(lines[it])
+        }
+
+        if (legDistIdx.size >= 2) {
+            fun startOf(i: Int, prevIdx: Int): Int {
+                if (i <= 0) return i
+                val trimmed = lines[i].trim()
+                return if (trimmed.startsWith("(") && i - 1 > prevIdx) i - 1 else i
+            }
+            val s1 = startOf(legDistIdx[0], -1)
+            val s2 = startOf(legDistIdx[1], legDistIdx[0])
+            if (s2 > s1) {
+                val pick = lines.subList(s1, s2).joinToString(" | ")
+                val drop = lines.subList(s2, lines.size).joinToString(" | ")
+                return normalize(pick) to normalize(drop)
+            }
+        }
+
+        // 2. Explicit PICKUP / DROP marker lines (jab KM na likha ho)
         val pLabelIdx = lines.indexOfFirst { PICKUP_LABEL_RE.containsMatchIn(it) && !DROP_LABEL_RE.containsMatchIn(it) }
         val dSearchStart = if (pLabelIdx >= 0) pLabelIdx + 1 else 1
         val dLabelIdx = if (dSearchStart < lines.size) {
@@ -369,27 +391,7 @@ object AreaPrefs {
             return normalize(pick) to normalize(drop)
         }
 
-        // 2. Distance headers (Total/Trip/Fare hamesha exclude)
-        val legDistIdx = lines.indices.filter {
-            KM_HEADER.containsMatchIn(lines[it]) && !TOTAL_TRIP_TAG_RE.containsMatchIn(lines[it])
-        }
-
-        if (legDistIdx.size >= 2) {
-            fun startOf(i: Int, prevIdx: Int): Int {
-                if (i <= 0) return i
-                val trimmed = lines[i].trim()
-                return if (trimmed.startsWith("(") && i - 1 > prevIdx) i - 1 else i
-            }
-            val s1 = startOf(legDistIdx[0], -1)
-            val s2 = startOf(legDistIdx[1], legDistIdx[0])
-            if (s2 > s1) {
-                val pick = lines.subList(s1, s2).joinToString(" | ")
-                val drop = lines.subList(s2, lines.size).joinToString(" | ")
-                return normalize(pick) to normalize(drop)
-            }
-        }
-
-        // 3. Two address blocks fallback (bina KM wale cards jaise ₹41 popup)
+        // 3. Two address blocks fallback
         val addrEndIdx = lines.indices.filter {
             lines[it].length >= 16 && PIN_LINE_RE.containsMatchIn(lines[it])
         }

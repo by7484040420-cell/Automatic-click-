@@ -490,7 +490,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
           {/* Pickup Max Distance (KM) */}
           <div className="rounded-lg border border-white/10 bg-[#171717] p-3">
             <p className="mb-2 text-xs font-semibold text-[#81C784]">
-              Pickup Max Distance (KM) — agar location nahi pata ho to kitne km tak uthana hai:
+              Pickup Max Distance (KM) — order card par Pickup ke aage likha (2.9 km) padhta hai:
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -499,7 +499,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                 step="0.1"
                 value={maxPickupKmText}
                 onChange={(e) => setMaxPickupKmText(e.target.value)}
-                placeholder="Jaise: 0.5, 0.6 ya 2 (khaali = off)"
+                placeholder="Jaise: 2, 3 ya 3.5 (khaali = off)"
                 className="font-mono-tabular h-10 min-w-[160px] flex-1 rounded-lg border border-white/10 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
               />
               <button
@@ -538,7 +538,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                 onChange={(e) => setAllowMissingKm(e.target.checked)}
                 className="h-4 w-4 rounded accent-[#43A047]"
               />
-              <span>Popup par KM na likha ho (jaise ₹41 wala card) to bhi Drop match par uthaye</span>
+              <span>Agar order card par Pickup ke aage KM na likha ho to bhi Drop match par uthaye</span>
             </label>
             {activeMaxKm > 0 && dropACount === 0 && (
               <p className="mt-1.5 text-xs font-semibold text-[#FFB74D]">

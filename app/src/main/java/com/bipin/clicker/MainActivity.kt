@@ -95,7 +95,6 @@ class MainActivity : AppCompatActivity() {
         binding.btnWhatsappHelp.setOnClickListener {
             LicenseManager.openWhatsAppSupport(this, isHelp = true)
         }
-        binding.btnOwnerAutoApprove.setOnClickListener { OwnerPaytmConfig.showSetupDialog(this) }
 
         // First frame turant render hone ke baad Ads load karo (app open lag na ho)
         binding.root.postDelayed({ initAdsIfNeeded() }, 600L)

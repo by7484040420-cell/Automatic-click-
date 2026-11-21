@@ -42,8 +42,8 @@ class OrderWatcherService : AccessibilityService() {
         private const val OCR_INTERVAL_MS = 1050L
         // Ek order (popup) par fast retry limit
         private const val MAX_TRIES_PER_POPUP = 2
-        // Swipe duration (ms): 160ms smooth continuous drag taaki ek hi baar me slider accept ho
-        private const val SWIPE_MS = 160L
+        // Swipe duration (ms): 140ms tez aur smooth drag taaki order aate hi turant accept ho
+        private const val SWIPE_MS = 140L
 
         private const val VERIFY_INTERVAL_MS = 220L
         private const val VERIFY_MAX_ATTEMPTS = 8
@@ -135,7 +135,6 @@ class OrderWatcherService : AccessibilityService() {
     }
 
     private fun isOwnAppInForeground(): Boolean {
-        if (OwnerPaytmConfig.setupDialogOpen) return true
         val activePkg = try { rootInActiveWindow?.packageName?.toString() } catch (_: Exception) { null }
         return activePkg == packageName
     }
@@ -144,8 +143,7 @@ class OrderWatcherService : AccessibilityService() {
         if (event == null) return
         if (AreaPrefs.isPaused(applicationContext)) return
         if (!LicenseManager.isActive(applicationContext)) return
-        if (OwnerPaytmConfig.setupDialogOpen) return
-        // Apne app ya keyboard typing events par scan mat chalao (10s lag bachane ke liye)
+        // Apne app ya keyboard typing events par scan mat chalao (lag bachane ke liye)
         if (isIgnoredPackage(event.packageName?.toString())) return
         if (isOwnAppInForeground()) return
 
@@ -650,9 +648,9 @@ class OrderWatcherService : AccessibilityService() {
                 "SLIDER pixel se, try $ocrAttempts"
             )
         } else {
-            // Slider ka rang nahi pakda: "Accept in Ns" text ki height par hi swipe (wahi pill ka beech hai)
+            // Slider ka rang nahi pakda: white (>>) circle screen width ~15% par hota hai
             slideGesture(
-                bmpW * 0.23f,
+                bmpW * 0.15f,
                 acceptLine.box.exactCenterY(),
                 bmpW * 0.90f,
                 "TEXT-y se, try $ocrAttempts"
@@ -737,7 +735,7 @@ class OrderWatcherService : AccessibilityService() {
         try { node.getBoundsInScreen(r) } catch (_: Exception) { return false }
         if (r.width() <= 0 || r.height() <= 0 || r.height() > 300) return false
         val w = resources.displayMetrics.widthPixels.toFloat()
-        return slideGesture(w * 0.229f, r.exactCenterY(), w * 0.90f, "GEOM text=$r")
+        return slideGesture(w * 0.15f, r.exactCenterY(), w * 0.90f, "GEOM text=$r")
     }
 
     private fun tapNodeCenter(node: AccessibilityNodeInfo): Boolean {
@@ -948,7 +946,12 @@ class OrderWatcherService : AccessibilityService() {
         }
 
         val dispatched = try {
-            single(SWIPE_MS, endX)
+            when (style) {
+                0 -> single(SWIPE_MS, endX)
+                1 -> single(200L, overshoot)
+                2 -> chain(50L, 170L, 45L, overshoot)
+                else -> single(170L, endX)
+            }
         } catch (e: Exception) {
             reportDebug("SWIPE exception: ${e.message}")
             false
