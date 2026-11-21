@@ -54,7 +54,8 @@ class AreaPreferenceActivity : AppCompatActivity() {
         loadWorkingStateFrom(AreaPrefs.getRejectDropSelections(this), workingDropR)
 
         pickupNoRestriction = AreaPrefs.getPickupSelections(this).isEmpty() &&
-            AreaPrefs.getPickupKeywords(this).isEmpty()
+            AreaPrefs.getPickupKeywords(this).isEmpty() &&
+            AreaPrefs.getMaxPickupKm(this) > 0f
         binding.pickupKeywords.setText(AreaPrefs.getPickupKeywords(this).joinToString(", "))
         val savedMaxKm = AreaPrefs.getMaxPickupKm(this)
         binding.etMaxPickupKm.setText(
@@ -664,13 +665,13 @@ class AreaPreferenceActivity : AppCompatActivity() {
     }
 
     private fun saveAndFinish() {
+        val words = binding.pickupKeywords.text.toString()
+            .split(Regex("[,;\\n]+")).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (pickupNoRestriction) {
             AreaPrefs.setPickupSelections(this, emptyMap())
             AreaPrefs.setPickupKeywords(this, emptyList())
         } else {
             AreaPrefs.setPickupSelections(this, workingPickupA)
-            val words = binding.pickupKeywords.text.toString()
-                .split(Regex("[,;\\n]+")).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             AreaPrefs.setPickupKeywords(this, words)
         }
         val maxKm = binding.etMaxPickupKm.text.toString().trim().replace(',', '.').toFloatOrNull()?.coerceAtLeast(0f) ?: 0f
@@ -680,10 +681,15 @@ class AreaPreferenceActivity : AppCompatActivity() {
         AreaPrefs.setRejectPickupSelections(this, workingPickupR)
         AreaPrefs.setRejectDropSelections(this, workingDropR)
 
-        val msg = if (workingDropA.isEmpty()) {
-            "Saved! Dhyan dein: DROP tab me kam se kam 1 area (A) select karein warna order nahi uthega"
-        } else {
-            "Saved (A, R & Distance rules)"
+        val hasPickupLoc = !pickupNoRestriction && (workingPickupA.isNotEmpty() || words.isNotEmpty())
+        val hasPickupKm = maxKm > 0f
+        val msg = when {
+            !hasPickupLoc && !hasPickupKm ->
+                "Saved! Dhyan dein: PICKUP me KM ya Location/Naam me se kam se kam 1 set karein warna clicker kaam nahi karega"
+            workingDropA.isEmpty() ->
+                "Saved! Dhyan dein: DROP tab me kam se kam 1 area (A) select karein warna order nahi uthega"
+            else ->
+                "Saved (A, R & Distance rules)"
         }
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         finish()

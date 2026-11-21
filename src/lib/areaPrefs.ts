@@ -71,13 +71,50 @@ function containsWord(text: string, phrase: string): boolean {
   return wordRegex(phrase).test(text);
 }
 
+const STANDALONE_KM_RE = /^(?:\(\s*)?\d+(?:[.,]\d+)?\s*(?:kms?|kilometers?|meters?|mtrs?|m)(?:\s*away|\s*from\s*you)?(?:\s*\))?$/i;
+const FARE_ONLY_RE = /^(?:₹|rs\.?|inr)\s*\d+/i;
+const SEC_ABBREV_RE = /^sector\s+([a-z0-9-]+)$/;
+const PHASE_ABBREV_RE = /^(.+?)\s+phase\s+([a-z0-9]+)$/;
+const GENERIC_LOCALITY_RE = /^(?:sector|sec|phase|block|pocket|stage|part)\s*[a-z0-9-]+$/;
+
+const CITY_PIN_PREFIXES: Record<string, RegExp> = {
+  delhi: /(?<![0-9])110\d{3}(?![0-9])/,
+  gurugram: /(?<![0-9])122\d{3}(?![0-9])/,
+  'greater noida': /(?<![0-9])20131\d(?![0-9])/,
+  noida: /(?<![0-9])20130\d(?![0-9])/,
+  faridabad: /(?<![0-9])121\d{3}(?![0-9])/,
+  ghaziabad: /(?<![0-9])2010\d{2}(?![0-9])/,
+};
+
 function cityAliases(normalizedCity: string): string[] {
   return CITY_ALIASES[normalizedCity] ?? [normalizedCity];
 }
 
+function pinMatchesCity(cityNorm: string, text: string): boolean {
+  const re = CITY_PIN_PREFIXES[cityNorm];
+  return re ? re.test(text) : false;
+}
+
 function cityMatches(cityNorm: string, text: string): boolean {
   const t = cityNorm === 'noida' ? text.replace(GREATER_NOIDA_RE, ' ') : text;
-  return cityAliases(cityNorm).some((alias) => containsWord(t, alias));
+  if (cityAliases(cityNorm).some((alias) => containsWord(t, alias))) return true;
+  return pinMatchesCity(cityNorm, text);
+}
+
+function mentionsOtherKnownCity(targetCityNorm: string, text: string): boolean {
+  for (const cityKey of Object.keys(CITY_ALIASES)) {
+    if (cityKey === targetCityNorm) continue;
+    if (targetCityNorm === 'greater noida' && cityKey === 'noida') continue;
+    if (cityMatches(cityKey, text)) return true;
+  }
+  return false;
+}
+
+function isVerifiedCityKey(cityNorm: string): boolean {
+  if (isZone(cityNorm)) return true;
+  if (cityNorm in CITY_ALIASES) return true;
+  const verified = loadVerifiedCities();
+  return Object.keys(verified).some((k) => normalize(k) === cityNorm);
 }
 
 function localityMatches(text: string, locality: string): boolean {
@@ -86,9 +123,30 @@ function localityMatches(text: string, locality: string): boolean {
   if (containsWord(text, loc)) return true;
   const m = SECTOR_SPLIT_RE.exec(loc);
   if (m) {
-    return containsWord(text, m[1]) && containsWord(text, m[2]);
+    if (containsWord(text, m[1]) && containsWord(text, m[2])) return true;
+    const secShort = m[2].replace(/^sector /, 'sec ');
+    if (containsWord(text, m[1]) && containsWord(text, secShort)) return true;
   }
+  const secM = SEC_ABBREV_RE.exec(loc);
+  if (secM && containsWord(text, `sec ${secM[1]}`)) return true;
+  const phM = PHASE_ABBREV_RE.exec(loc);
+  if (phM && containsWord(text, `${phM[1]} ph ${phM[2]}`)) return true;
   return false;
+}
+
+function keywordMatch(keywords: string[], pickupText: string): string | null {
+  if (keywords.length === 0) return null;
+  const pickupCompact = pickupText.replace(/[^a-z0-9]+/g, '');
+  for (const raw of keywords) {
+    const kw = normalize(raw);
+    if (!kw) continue;
+    if (containsWord(pickupText, kw)) return raw;
+    const kwCompact = kw.replace(/[^a-z0-9]+/g, '');
+    if (kwCompact.length >= 5 && kw.includes(' ') && pickupCompact.includes(kwCompact)) {
+      return raw;
+    }
+  }
+  return null;
 }
 
 function isZone(cityNorm: string): boolean {
@@ -115,29 +173,69 @@ function zoneAnyMatch(zoneNorm: string, text: string): string | null {
   return null;
 }
 
-function findMatchingSelection(selections: SelectionMap, normalizedText: string): string | null {
+function findMatchingSelection(
+  selections: SelectionMap,
+  normalizedText: string,
+  fullNormalizedText: string = normalizedText
+): string | null {
+  let customFolders: Record<string, string[]> | null = null;
+
   for (const [city, localities] of Object.entries(selections)) {
     const cityNorm = normalize(city);
     if (!cityNorm) continue;
-    const zone = isZone(cityNorm);
-    const cityMatched = cityMatches(zone ? 'delhi' : cityNorm, normalizedText);
 
-    if (localities.includes(ALL_MARKER)) {
-      if (!cityMatched) continue;
-      if (!zone) return `All ${city}`;
-      const zHit = zoneAnyMatch(cityNorm, normalizedText);
-      if (zHit) return zHit;
+    // User custom folder: folder name doesn't appear on order card, match by its places directly
+    if (!isVerifiedCityKey(cityNorm)) {
+      if (!customFolders) customFolders = getCustomLocalities();
+      const folderLocs = localities.includes(ALL_MARKER)
+        ? (customFolders[city] ?? [])
+        : localities;
+      const hit = folderLocs.find((loc) => localityMatches(normalizedText, loc));
+      if (hit) return `${city}: ${hit}`;
       continue;
     }
 
-    if (!cityMatched) continue;
+    const zone = isZone(cityNorm);
+    const targetCity = zone ? 'delhi' : cityNorm;
+    const cityMatched = cityMatches(targetCity, normalizedText);
+
+    if (localities.includes(ALL_MARKER)) {
+      if (cityMatched) {
+        if (!zone) return `All ${city}`;
+        const zHit = zoneAnyMatch(cityNorm, normalizedText);
+        if (zHit) return zHit;
+        continue;
+      }
+      if (zone && !mentionsOtherKnownCity('delhi', normalizedText)) {
+        const zHit = zoneAnyMatch(cityNorm, normalizedText);
+        if (zHit) return zHit;
+      }
+      continue;
+    }
+
+    const otherCityInSegment = !cityMatched && mentionsOtherKnownCity(targetCity, normalizedText);
+    if (otherCityInSegment) continue;
+
+    const fullCardCityMatched = cityMatched || cityMatches(targetCity, fullNormalizedText);
     for (const locality of localities) {
-      if (localityMatches(normalizedText, locality)) {
+      const locNorm = normalize(locality);
+      const generic = GENERIC_LOCALITY_RE.test(locNorm);
+      if ((cityMatched || !generic || fullCardCityMatched) && localityMatches(normalizedText, locality)) {
         return `${city}: ${locality}`;
       }
     }
   }
   return null;
+}
+
+function isNonPlaceHeaderLine(line: string): boolean {
+  const t = line.trim().toLowerCase();
+  if (!t) return true;
+  if (t === 'skip' || t.startsWith('skip ')) return true;
+  if (FARE_ONLY_RE.test(t)) return true;
+  if (TOTAL_TRIP_TAG_RE.test(t)) return true;
+  if (KM_HEADER_RE.test(t)) return true;
+  return false;
 }
 
 export function splitOrder(rawText: string): [string, string] {
@@ -149,32 +247,7 @@ export function splitOrder(rawText: string): [string, string] {
 
   const lines = t.split(/\s*\|\s*|\n+/).map((l) => l.trim()).filter(Boolean);
 
-  // 1. Distance header splitting (e.g. Sector 34 (2.9 km) ... Sector 52 (6.9 km))
-  const allDistIdx = lines
-    .map((line, i) => (KM_HEADER_RE.test(line) ? i : -1))
-    .filter((i) => i >= 0);
-
-  const legDistIdx = allDistIdx.filter((i) => !TOTAL_TRIP_TAG_RE.test(lines[i]));
-
-  if (legDistIdx.length >= 2) {
-    const startOf = (i: number, prevIdx: number) => {
-      if (i <= 0) return i;
-      const trimmed = lines[i].trim();
-      if (trimmed.startsWith('(') && i - 1 > prevIdx) {
-        return i - 1;
-      }
-      return i;
-    };
-    const s1 = startOf(legDistIdx[0], -1);
-    const s2 = startOf(legDistIdx[1], legDistIdx[0]);
-    if (s2 > s1) {
-      const pick = lines.slice(s1, s2).join(' | ');
-      const drop = lines.slice(s2).join(' | ');
-      return [normalize(pick), normalize(drop)];
-    }
-  }
-
-  // 2. Explicit PICKUP / DROP markers (when card has no KM shown)
+  // 1. Explicit PICKUP / DROP markers first when both exist
   const pLabelIdx = lines.findIndex((l) => PICKUP_LABEL_RE.test(l) && !DROP_LABEL_RE.test(l));
   const dLabelIdx = lines.findIndex(
     (l, i) => i > Math.max(0, pLabelIdx) && DROP_LABEL_RE.test(l) && !PICKUP_LABEL_RE.test(l)
@@ -184,23 +257,68 @@ export function splitOrder(rawText: string): [string, string] {
     const drop = lines.slice(dLabelIdx).join(' | ');
     return [normalize(pick), normalize(drop)];
   }
+
+  // 2. Distance header splitting (e.g. Sector 34 (2.9 km) ... Sector 52 (6.9 km))
+  const legDistIdx = lines
+    .map((line, i) =>
+      !TOTAL_TRIP_TAG_RE.test(line) &&
+      !NON_PICKUP_DIST_TAG_RE.test(line) &&
+      KM_HEADER_RE.test(line) &&
+      (line.length <= 45 || line.trim().startsWith('(') || STANDALONE_KM_RE.test(line.trim()))
+        ? i
+        : -1
+    )
+    .filter((i) => i >= 0);
+
+  if (legDistIdx.length >= 2) {
+    const firstIdx = legDistIdx[0];
+    const secondIdx = legDistIdx[1];
+    const firstTrimmed = lines[firstIdx].trim();
+    const secondTrimmed = lines[secondIdx].trim();
+
+    let s1 = firstIdx;
+    let pulledFirst = false;
+    if (
+      firstIdx > 0 &&
+      (firstTrimmed.startsWith('(') || STANDALONE_KM_RE.test(firstTrimmed)) &&
+      !isNonPlaceHeaderLine(lines[firstIdx - 1])
+    ) {
+      s1 = firstIdx - 1;
+      pulledFirst = true;
+    }
+
+    let s2 = secondIdx;
+    if (
+      secondIdx - 1 > firstIdx &&
+      (secondTrimmed.startsWith('(') || (pulledFirst && STANDALONE_KM_RE.test(secondTrimmed))) &&
+      !isNonPlaceHeaderLine(lines[secondIdx - 1])
+    ) {
+      s2 = secondIdx - 1;
+    }
+
+    if (s2 > s1) {
+      const pick = lines.slice(s1, s2).join(' | ');
+      const drop = lines.slice(s2).join(' | ');
+      return [normalize(pick), normalize(drop)];
+    }
+  }
+
+  // 3. Explicit DROP marker alone
   if (pLabelIdx < 0 && dLabelIdx > 0) {
-    const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
-    const startPick = firstLineIsFare && dLabelIdx > 1 ? 1 : 0;
+    const startPick = FARE_ONLY_RE.test(lines[0]) && dLabelIdx > 1 ? 1 : 0;
     const pick = lines.slice(startPick, dLabelIdx).join(' | ');
     const drop = lines.slice(dLabelIdx).join(' | ');
     return [normalize(pick), normalize(drop)];
   }
 
-  // 3. Fallback: two address blocks ending with 6-digit PIN, ", India", or city+address
+  // 4. Fallback: two address blocks ending with 6-digit PIN, ", India", or city+address
   const addrEndIdx = lines
     .map((line, i) => (line.length >= 16 && PIN_LINE_RE.test(line) ? i : -1))
     .filter((i) => i >= 0);
   if (addrEndIdx.length >= 2) {
     const splitAfterFirstAddr = addrEndIdx[0] + 1;
     if (splitAfterFirstAddr < lines.length) {
-      const firstLineIsFare = /^(?:₹|rs\.?|inr)\s*\d+/i.test(lines[0]);
-      const startPick = firstLineIsFare && splitAfterFirstAddr > 1 ? 1 : 0;
+      const startPick = FARE_ONLY_RE.test(lines[0]) && splitAfterFirstAddr > 1 ? 1 : 0;
       const pick = lines.slice(startPick, splitAfterFirstAddr).join(' | ');
       const drop = lines.slice(splitAfterFirstAddr).join(' | ');
       return [normalize(pick), normalize(drop)];
@@ -434,6 +552,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
   const pickupKeywords = getPickupKeywords();
   const maxPickupKm = getMaxPickupKm();
   const allowMissingKm = getAllowPickupWhenKmMissing();
+  const fullNorm = normalize(rawScreenText);
   const [pickupText, dropText] = splitOrder(rawScreenText);
   const pickupDistanceKm = extractDistanceKm(pickupText);
   const tripDetails = isTripDetailsScreen(rawScreenText);
@@ -456,7 +575,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
   }
 
   // 1. Check Reject (R) rules FIRST for Pickup & Drop
-  const rejectPickupHit = findMatchingSelection(rejectPickupSelections, pickupText);
+  const rejectPickupHit = findMatchingSelection(rejectPickupSelections, pickupText, fullNorm);
   if (rejectPickupHit) {
     return {
       matched: false,
@@ -473,7 +592,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     };
   }
 
-  const rejectDropHit = findMatchingSelection(rejectDropSelections, dropText);
+  const rejectDropHit = findMatchingSelection(rejectDropSelections, dropText, fullNorm);
   if (rejectDropHit) {
     return {
       matched: false,
@@ -507,7 +626,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     };
   }
 
-  const dropHit = findMatchingSelection(dropSelections, dropText);
+  const dropHit = findMatchingSelection(dropSelections, dropText, fullNorm);
   if (!dropHit) {
     return {
       matched: false,
@@ -524,109 +643,94 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     };
   }
 
-  // 3. Check Pickup Accept (A), Keywords, or Max Pickup KM
+  // 3. Check Pickup Accept (A) / Khas Naam / Max Pickup KM
   const hasPickupCities = Object.keys(pickupSelections).length > 0;
   const hasKeywords = pickupKeywords.length > 0;
+  const hasPickupLoc = hasPickupCities || hasKeywords;
   const hasDistanceRule = maxPickupKm > 0;
 
-  if (!hasPickupCities && !hasKeywords && !hasDistanceRule) {
+  if (!hasPickupLoc && !hasDistanceRule) {
     return {
-      matched: true,
+      matched: false,
       rejected: false,
       rejectedBy: null,
-      reason: `ACCEPT (A) — Drop (${dropHit}) · Pickup: koi restriction nahi`,
+      reason: 'Pickup: ABHI SET NAHI HAI (KM ya Location/Naam me se kam se kam 1 set karein)',
       pickupText,
       dropText,
       pickupDistanceKm,
       isTripDetails: false,
       hasAcceptWord,
-      pickupMatchedBy: 'No restriction',
+      pickupMatchedBy: null,
       dropMatchedBy: dropHit,
     };
   }
 
-  if (hasPickupCities) {
-    const pickupHit = findMatchingSelection(pickupSelections, pickupText);
-    if (pickupHit) {
+  let locHitLabel: string | null = null;
+  if (hasPickupLoc) {
+    if (hasPickupCities) {
+      locHitLabel = findMatchingSelection(pickupSelections, pickupText, fullNorm);
+    }
+    if (!locHitLabel && hasKeywords) {
+      const kwHit = keywordMatch(pickupKeywords, pickupText);
+      if (kwHit) locHitLabel = `Keyword: ${kwHit}`;
+    }
+    if (!locHitLabel) {
       return {
-        matched: true,
+        matched: false,
         rejected: false,
         rejectedBy: null,
-        reason: `ACCEPT (A) — Pickup (${pickupHit}) -> Drop (${dropHit})`,
+        reason: hasDistanceRule
+          ? `Drop (${dropHit}) mila, par Pickup location / khaas naam match nahi hua (dono save hain)`
+          : `Drop (${dropHit}) mila, par Pickup (A) / khaas naam match nahi hua`,
         pickupText,
         dropText,
         pickupDistanceKm,
         isTripDetails: false,
         hasAcceptWord,
-        pickupMatchedBy: pickupHit,
+        pickupMatchedBy: null,
         dropMatchedBy: dropHit,
       };
     }
   }
 
-  const keywordHit = pickupKeywords.find((kw) => containsWord(pickupText, normalize(kw)));
-  if (keywordHit) {
-    return {
-      matched: true,
-      rejected: false,
-      rejectedBy: null,
-      reason: `ACCEPT (A) — Pickup Keyword ("${keywordHit}") -> Drop (${dropHit})`,
-      pickupText,
-      dropText,
-      pickupDistanceKm,
-      isTripDetails: false,
-      hasAcceptWord,
-      pickupMatchedBy: `Keyword: ${keywordHit}`,
-      dropMatchedBy: dropHit,
-    };
-  }
-
+  let kmHitLabel: string | null = null;
   if (hasDistanceRule) {
     if (pickupDistanceKm !== null && pickupDistanceKm <= maxPickupKm + 0.0001) {
+      kmHitLabel = `<= ${maxPickupKm} km (${pickupDistanceKm} km)`;
+    } else if (pickupDistanceKm === null && allowMissingKm) {
+      kmHitLabel = 'Pickup KM missing (allowed)';
+    } else {
       return {
-        matched: true,
+        matched: false,
         rejected: false,
         rejectedBy: null,
-        reason: `ACCEPT (A) — Pickup Distance (${pickupDistanceKm} km <= ${maxPickupKm} km) -> Drop (${dropHit})`,
+        reason:
+          pickupDistanceKm !== null
+            ? `Drop (${dropHit}) mila, par Pickup distance ${pickupDistanceKm} km > ${maxPickupKm} km limit`
+            : `Drop (${dropHit}) mila, par Pickup KM card par nahi mila (limit <= ${maxPickupKm} km)`,
         pickupText,
         dropText,
         pickupDistanceKm,
         isTripDetails: false,
         hasAcceptWord,
-        pickupMatchedBy: `<= ${maxPickupKm} km (${pickupDistanceKm} km)`,
-        dropMatchedBy: dropHit,
-      };
-    }
-    if (pickupDistanceKm === null && allowMissingKm && !hasPickupCities && !hasKeywords) {
-      return {
-        matched: true,
-        rejected: false,
-        rejectedBy: null,
-        reason: `ACCEPT (A) — Card par Pickup KM nahi likha (<= ${maxPickupKm} km fallback) -> Drop (${dropHit})`,
-        pickupText,
-        dropText,
-        pickupDistanceKm,
-        isTripDetails: false,
-        hasAcceptWord,
-        pickupMatchedBy: 'Pickup KM missing (allowed)',
+        pickupMatchedBy: locHitLabel,
         dropMatchedBy: dropHit,
       };
     }
   }
 
+  const pickupLabel = [locHitLabel, kmHitLabel].filter(Boolean).join(' + ');
   return {
-    matched: false,
+    matched: true,
     rejected: false,
     rejectedBy: null,
-    reason: hasDistanceRule
-      ? `Drop (${dropHit}) mila, par Pickup location / ${maxPickupKm} km limit match nahi hui`
-      : `Drop (${dropHit}) mila, par Pickup (A) / khaas naam match nahi hua`,
+    reason: `ACCEPT (A) — Pickup (${pickupLabel}) -> Drop (${dropHit})`,
     pickupText,
     dropText,
     pickupDistanceKm,
     isTripDetails: false,
     hasAcceptWord,
-    pickupMatchedBy: null,
+    pickupMatchedBy: pickupLabel,
     dropMatchedBy: dropHit,
   };
 }

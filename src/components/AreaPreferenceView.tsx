@@ -87,7 +87,10 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   );
 
   const [pickupNoRestriction, setPickupNoRestriction] = useState<boolean>(
-    () => Object.keys(getPickupSelections()).length === 0 && getPickupKeywords().length === 0
+    () =>
+      Object.keys(getPickupSelections()).length === 0 &&
+      getPickupKeywords().length === 0 &&
+      getMaxPickupKm() > 0
   );
   const [keywordsText, setKeywordsText] = useState<string>(() =>
     getPickupKeywords().join(', ')
@@ -369,31 +372,38 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   };
 
   const handleSave = () => {
+    const words = Array.from(
+      new Set(
+        keywordsText
+          .split(/[,;\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    );
     if (pickupNoRestriction) {
       setPickupSelections({});
       setPickupKeywords([]);
     } else {
       setPickupSelections(serializeSelectionMap(workingPickupA));
-      const words = Array.from(
-        new Set(
-          keywordsText
-            .split(/[,;\n]+/)
-            .map((s) => s.trim())
-            .filter(Boolean)
-        )
-      );
       setPickupKeywords(words);
     }
     const parsedKm = Number(maxPickupKmText.trim().replace(',', '.'));
-    setMaxPickupKm(Number.isFinite(parsedKm) && parsedKm > 0 ? parsedKm : 0);
+    const maxKm = Number.isFinite(parsedKm) && parsedKm > 0 ? parsedKm : 0;
+    setMaxPickupKm(maxKm);
     setAllowPickupWhenKmMissing(allowMissingKm);
+
+    const pickupAOut = pickupNoRestriction ? {} : serializeSelectionMap(workingPickupA);
+    const hasPickupLoc = Object.keys(pickupAOut).length > 0 || (!pickupNoRestriction && words.length > 0);
+    const hasPickupKm = maxKm > 0;
 
     const dropAOut = serializeSelectionMap(workingDropA);
     setDropSelections(dropAOut);
     setRejectPickupSelections(serializeSelectionMap(workingPickupR));
     setRejectDropSelections(serializeSelectionMap(workingDropR));
 
-    if (Object.keys(dropAOut).length === 0) {
+    if (!hasPickupLoc && !hasPickupKm) {
+      onSaved('Dhyan dein: PICKUP me KM ya Location/Naam me se kam se kam 1 set karein warna clicker kaam nahi karega');
+    } else if (Object.keys(dropAOut).length === 0) {
       onSaved('Dhyan dein: Drop (A) set kiye bina koi bhi order auto-accept nahi hoga');
     } else {
       onSaved('Saved (A, R & Distance rules updated)');
@@ -484,7 +494,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
               onChange={(e) => setPickupNoRestriction(e.target.checked)}
               className="h-5 w-5 rounded accent-[#43A047]"
             />
-            <span>Pickup khaali rakhein (location band — distance ya sab chalega)</span>
+            <span>Sirf Pickup KM use karein (Location / Khas Naam band)</span>
           </label>
 
           {/* Pickup Max Distance (KM) */}
@@ -529,7 +539,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
               ))}
             </div>
             <p className="mt-1.5 text-[11px] text-[#9E9E9E]">
-              Drop par chuni hui location (A) hona zaroori hai; Pickup me A-location YA {activeMaxKm > 0 ? `${activeMaxKm} km ke andar` : 'set km ke andar'} aaye to order uth jayega (Drop ka km kabhi Pickup me nahi gina jayega).
+              Pickup me KM ya Location/Naam me se koi EK bhi set ho to clicker chalega; agar DONO save hain to dono match hone par hi order uthega (Drop ka km kabhi Pickup me nahi gina jayega).
             </p>
             <label className="mt-2.5 flex min-h-[36px] cursor-pointer items-center gap-2.5 text-xs font-medium text-[#E0E0E0] select-none">
               <input

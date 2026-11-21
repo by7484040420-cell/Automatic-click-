@@ -47,7 +47,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:textColor="#FFFFFF"
-        android:text="Pickup khaali rakhein (location band — distance ya sab chalega)" />
+        android:text="Sirf Pickup KM use karein (Location / Khas Naam band)" />
 
     <LinearLayout
         android:id="@+id/pickupDistanceBox"

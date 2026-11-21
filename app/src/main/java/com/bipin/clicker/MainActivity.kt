@@ -277,9 +277,13 @@ class MainActivity : AppCompatActivity() {
             if (pickup.isNotEmpty()) parts.add("${pickup.size} city set")
             if (pickupKeywords.isNotEmpty()) parts.add("${pickupKeywords.size} khaas naam")
             if (kmLabel.isNotEmpty()) parts.add("<= $kmLabel")
+            val bothLocAndKm = (pickup.isNotEmpty() || pickupKeywords.isNotEmpty()) && kmLabel.isNotEmpty()
             append(
-                if (parts.isEmpty()) "Pickup (A): koi restriction nahi"
-                else "Pickup (A): ${parts.joinToString(" · ")}"
+                when {
+                    parts.isEmpty() -> "Pickup (A): ABHI SET NAHI HAI (KM ya Location/Naam set karein)"
+                    bothLocAndKm -> "Pickup (A): ${parts.joinToString(" + ")} (dono match zaroori)"
+                    else -> "Pickup (A): ${parts.joinToString(" · ")}"
+                }
             )
             if (rejectPickup.isNotEmpty()) append(" · Reject (R): ${rejectPickup.size}")
             append("\n")

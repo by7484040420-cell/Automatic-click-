@@ -38,12 +38,14 @@ class OrderWatcherService : AccessibilityService() {
 
         private const val FAST_RETRY_MS = 15L
         private const val FAST_RETRY_WINDOW_MS = 5200L
-        private const val CLICK_COOLDOWN_MS = 280L
-        private const val OCR_INTERVAL_MS = 1050L
+        private const val CLICK_COOLDOWN_MS = 220L
+        private const val OCR_INTERVAL_MS = 450L
         // Ek order (popup) par fast retry limit
-        private const val MAX_TRIES_PER_POPUP = 2
+        private const val MAX_TRIES_PER_POPUP = 3
         // Swipe duration (ms): 140ms tez aur smooth drag taaki order aate hi turant accept ho
         private const val SWIPE_MS = 140L
+
+        private val COUNTDOWN_STRIP_RE = Regex("accept\\s*in\\s*\\d+\\s*s?", RegexOption.IGNORE_CASE)
 
         private const val VERIFY_INTERVAL_MS = 220L
         private const val VERIFY_MAX_ATTEMPTS = 8
@@ -201,7 +203,8 @@ class OrderWatcherService : AccessibilityService() {
 
                 setStatus("ORDER FOUND")
 
-                val signature = "${root.packageName}:${screenText.hashCode()}"
+                val stableText = COUNTDOWN_STRIP_RE.replace(screenText, "accept in")
+                val signature = "${root.packageName}:${stableText.hashCode()}"
                 val now = System.currentTimeMillis()
 
                 if (verifyAttemptsLeft > 0 && signature == lastSignature) {
@@ -210,7 +213,7 @@ class OrderWatcherService : AccessibilityService() {
 
                 // Every newly-seen order gets an immediate action attempt.
                 // Only apply short cooldown on the exact same signature; new orders fire immediately.
-                val sameOrderCooldownOk = (signature != lastSignature) || (now - treeDoneAt > 1200L)
+                val sameOrderCooldownOk = (signature != lastSignature) || (now - treeDoneAt > 900L)
                 if (sameOrderCooldownOk && (signature != lastSignature || now - lastActionAt >= CLICK_COOLDOWN_MS)) {
                     if (findAndAccept(root)) {
                         treeDoneAt = now
@@ -511,8 +514,9 @@ class OrderWatcherService : AccessibilityService() {
         }
         if (AreaPrefs.isPaused(applicationContext)) return
         if (isOwnAppInForeground()) return
+        if (verifyAttemptsLeft > 0) return
         // Action ke turant baad screenshot mat lo (phone ka screenshot popup slider ke upar aa jata hai)
-        if (System.currentTimeMillis() - lastActionAt < 600L) return
+        if (System.currentTimeMillis() - lastActionAt < 300L) return
         if (SystemClock.uptimeMillis() < slideInFlightUntil) return
         val pm = getSystemService(PowerManager::class.java)
         if (pm != null && !pm.isInteractive) return
@@ -621,11 +625,12 @@ class OrderWatcherService : AccessibilityService() {
         }
         val (acceptLine, _) = matchedCard ?: return
 
+        if (verifyAttemptsLeft > 0) return
         val nowT = System.currentTimeMillis()
-        if (nowT - ocrLastSeenAt > 2000L) ocrAttempts = 0 // popup gayab hua tha -> naya order
+        if (nowT - ocrLastSeenAt > 1800L) ocrAttempts = 0 // popup gayab hua tha -> naya order
         ocrLastSeenAt = nowT
         if (ocrAttempts >= MAX_TRIES_PER_POPUP) {
-            // is order par ek koshish ho chuki; popup khatam hone tak kuch nahi karna
+            // is order par koshish ho chuki; popup khatam hone tak kuch nahi karna
             return
         }
         if (nowT - lastActionAt < CLICK_COOLDOWN_MS) return
@@ -684,9 +689,9 @@ class OrderWatcherService : AccessibilityService() {
         acceptLine: ScreenOcrScanner.Line,
         screenH: Int
     ): List<ScreenOcrScanner.Line> {
-        val maxLookbackY = (acceptLine.box.top - screenH * 0.45f).toInt()
+        val maxLookbackY = (acceptLine.box.top - screenH * 0.62f).toInt()
         val maxBottomY = acceptLine.box.bottom + (screenH * 0.02f).toInt()
-        val maxGapPx = (screenH * 0.12f).toInt()
+        val maxGapPx = (screenH * 0.22f).toInt()
 
         val idx = sortedLines.indexOf(acceptLine)
         if (idx < 0) return listOf(acceptLine)
@@ -708,7 +713,8 @@ class OrderWatcherService : AccessibilityService() {
             if (anchorTop - l.box.bottom > maxGapPx) break
             if (isTripDetailsScreen(l.text)) break
             val lt = l.text.lowercase().trim()
-            if (lt == "skip" || lt.startsWith("skip ")) break
+            // "Skip" aksar card ke top-right par Pickup ke paas hota hai -> sirf Skip hatao, loop mat todo!
+            if (lt == "skip" || lt.startsWith("skip ")) continue
             picked.add(0, l)
             if (l.box.top < anchorTop) anchorTop = l.box.top
         }
@@ -873,11 +879,11 @@ class OrderWatcherService : AccessibilityService() {
         val overshoot = (endX + 26f).coerceAtMost(maxX)
         val info = "$tag start=${startX.toInt()},${y.toInt()} end=${endX.toInt()} | $info0"
         val t0 = SystemClock.uptimeMillis()
-        slideInFlightUntil = t0 + 4000L
+        slideInFlightUntil = t0 + 1500L
 
         fun fin(ok: Boolean, what: String) {
-            // thumb ko wapas laut'ne ka time do, phir agli koshish
-            slideInFlightUntil = SystemClock.uptimeMillis() + 260L
+            // thumb ko wapas laut'ne ka thoda time do, phir turant agli koshish
+            slideInFlightUntil = SystemClock.uptimeMillis() + 120L
             lastSwipeResult = "$tag ${if (ok) "DONE" else what}"
             reportDebug("SWIPE $lastSwipeResult ${SystemClock.uptimeMillis() - t0}ms\n$info")
             if (ok) SoundPlayer.playOrderSound(applicationContext)
@@ -948,9 +954,9 @@ class OrderWatcherService : AccessibilityService() {
         val dispatched = try {
             when (style) {
                 0 -> single(SWIPE_MS, endX)
-                1 -> single(200L, overshoot)
-                2 -> chain(50L, 170L, 45L, overshoot)
-                else -> single(170L, endX)
+                1 -> single(185L, overshoot)
+                2 -> single(220L, overshoot)
+                else -> chain(40L, 160L, 35L, overshoot)
             }
         } catch (e: Exception) {
             reportDebug("SWIPE exception: ${e.message}")
@@ -1066,7 +1072,9 @@ class OrderWatcherService : AccessibilityService() {
         lastReportAt = now
         val full = if (lastSwipeResult != "-" && !message.startsWith("SWIPE")) "$message\n[last: $lastSwipeResult]" else message
         DebugOverlay.update(this, full)
-        updateStatusNotification(full)
+        if (!message.startsWith("OCR chal raha hai") && !message.startsWith("Scan (")) {
+            updateStatusNotification(full)
+        }
     }
 
     private fun setStatus(status: String) {
