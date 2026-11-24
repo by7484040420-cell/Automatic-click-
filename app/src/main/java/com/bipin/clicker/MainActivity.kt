@@ -280,7 +280,7 @@ class MainActivity : AppCompatActivity() {
             val bothLocAndKm = (pickup.isNotEmpty() || pickupKeywords.isNotEmpty()) && kmLabel.isNotEmpty()
             append(
                 when {
-                    parts.isEmpty() -> "Pickup (A): ABHI SET NAHI HAI (KM ya Location/Naam set karein)"
+                    parts.isEmpty() -> "Pickup (A): Kahin se bhi (any distance)"
                     bothLocAndKm -> "Pickup (A): ${parts.joinToString(" + ")} (dono match zaroori)"
                     else -> "Pickup (A): ${parts.joinToString(" · ")}"
                 }

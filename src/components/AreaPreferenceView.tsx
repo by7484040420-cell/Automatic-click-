@@ -1,9 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Check,
   ChevronDown,
   ChevronRight,
-  FolderPlus,
   Plus,
   RotateCcw,
   Search,
@@ -11,9 +9,7 @@ import {
 } from 'lucide-react';
 import {
   ALL_MARKER,
-  addCustomLocalities,
   addCustomLocality,
-  getAllowPickupWhenKmMissing,
   getDropSelections,
   getMaxPickupKm,
   getPickupKeywords,
@@ -86,12 +82,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     cloneSelectionMap(getRejectDropSelections())
   );
 
-  const [pickupNoRestriction, setPickupNoRestriction] = useState<boolean>(
-    () =>
-      Object.keys(getPickupSelections()).length === 0 &&
-      getPickupKeywords().length === 0 &&
-      getMaxPickupKm() > 0
-  );
   const [keywordsText, setKeywordsText] = useState<string>(() =>
     getPickupKeywords().join(', ')
   );
@@ -99,9 +89,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     const saved = getMaxPickupKm();
     return saved > 0 ? String(saved) : '';
   });
-  const [allowMissingKm, setAllowMissingKm] = useState<boolean>(() =>
-    getAllowPickupWhenKmMissing()
-  );
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedCities, setExpandedCities] = useState<Record<string, boolean>>({});
   const [inlineInputs, setInlineInputs] = useState<Record<string, string>>({});
@@ -109,11 +96,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   // Modals
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [deleteFolderCity, setDeleteFolderCity] = useState<string | null>(null);
-  const [showTickedFolderModal, setShowTickedFolderModal] = useState(false);
-  const [tickedFolderName, setTickedFolderName] = useState('');
-  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [newFolderPlaces, setNewFolderPlaces] = useState('');
 
   const activeAcceptMap = currentTab === 'PICKUP' ? workingPickupA : workingDropA;
   const setActiveAcceptMap = currentTab === 'PICKUP' ? setWorkingPickupA : setWorkingDropA;
@@ -138,20 +120,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
       .join(' ');
   }, [rawQuery]);
 
-  const flattenedTicked = useMemo(() => {
-    const out = new Set<string>();
-    for (const map of [activeAcceptMap, activeRejectMap]) {
-      for (const [city, set] of Object.entries(map)) {
-        if (set.has(ALL_MARKER)) {
-          for (const loc of allCities[city] ?? []) out.add(loc);
-        } else {
-          for (const loc of set) out.add(loc);
-        }
-      }
-    }
-    return Array.from(out);
-  }, [activeAcceptMap, activeRejectMap, allCities]);
-
   const toggleCityExpanded = (city: string) => {
     setExpandedCities((prev) => ({ ...prev, [city]: !prev[city] }));
   };
@@ -165,9 +133,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     const isCurrentlyAll = targetMap[city]?.has(ALL_MARKER) ?? false;
 
     if (mode === 'A') {
-      if (!isCurrentlyAll && currentTab === 'PICKUP' && pickupNoRestriction) {
-        setPickupNoRestriction(false);
-      }
       setActiveAcceptMap((prev) => {
         const next = { ...prev };
         if (isCurrentlyAll) delete next[city];
@@ -211,9 +176,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     const hasOwn = targetMap[city]?.has(locality) ?? false;
 
     if (mode === 'A') {
-      if (!hasOwn && currentTab === 'PICKUP' && pickupNoRestriction) {
-        setPickupNoRestriction(false);
-      }
       setActiveAcceptMap((prev) => {
         const next = { ...prev };
         const set = new Set(next[city] ?? []);
@@ -267,9 +229,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     addCustomLocality(city, value);
     setAllCities(loadAllCitiesWithCustom());
     const setter = mode === 'A' ? setActiveAcceptMap : setActiveRejectMap;
-    if (mode === 'A' && currentTab === 'PICKUP' && pickupNoRestriction) {
-      setPickupNoRestriction(false);
-    }
     setter((prev) => {
       const next = { ...prev };
       const set = new Set(next[city] ?? []);
@@ -286,9 +245,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     addCustomLocality(cityName, niceSearchName);
     setAllCities(loadAllCitiesWithCustom());
     const setter = mode === 'A' ? setActiveAcceptMap : setActiveRejectMap;
-    if (mode === 'A' && currentTab === 'PICKUP' && pickupNoRestriction) {
-      setPickupNoRestriction(false);
-    }
     setter((prev) => {
       const next = { ...prev };
       const set = new Set(next[cityName] ?? []);
@@ -300,49 +256,11 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     onNotify(`${niceSearchName} (${cityName}) [${mode}] jud gaya. SAVE dabao.`);
   };
 
-  const handleCreateFromTicked = () => {
-    const name = tickedFolderName.trim();
-    if (!name) {
-      onNotify('Folder ka naam likhein');
-      return;
-    }
-    addCustomLocalities(name, flattenedTicked);
-    setAllCities(loadAllCitiesWithCustom());
-    setShowTickedFolderModal(false);
-    setTickedFolderName('');
-    setExpandedCities((prev) => ({ ...prev, [name]: true }));
-    onNotify(`"${name}" ban gaya (${flattenedTicked.length} jagah). Use A ya R se select karke SAVE dabao.`);
-  };
-
-  const handleCreateCustomFolder = () => {
-    const name = newFolderName.trim();
-    const places = newFolderPlaces
-      .split(/[,\n]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!name) {
-      onNotify('Folder ka naam likhein');
-      return;
-    }
-    if (places.length === 0) {
-      onNotify('Kam se kam ek jagah ka naam likhein');
-      return;
-    }
-    addCustomLocalities(name, places);
-    setAllCities(loadAllCitiesWithCustom());
-    setShowCreateFolderModal(false);
-    setNewFolderName('');
-    setNewFolderPlaces('');
-    setExpandedCities((prev) => ({ ...prev, [name]: true }));
-    onNotify(`"${name}" ban gaya (${places.length} jagah). Kholkar A ya R select karo aur SAVE dabao.`);
-  };
-
   const handleConfirmResetAll = () => {
     setWorkingPickupA({});
     setWorkingDropA({});
     setWorkingPickupR({});
     setWorkingDropR({});
-    setPickupNoRestriction(true);
     setKeywordsText('');
     setMaxPickupKmText('');
     setPickupSelections({});
@@ -351,6 +269,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     setRejectDropSelections({});
     setPickupKeywords([]);
     setMaxPickupKm(0);
+    setAllowPickupWhenKmMissing(true);
     setShowResetConfirm(false);
     onNotify('Sab location (A aur R) aur distance hat gaye');
   };
@@ -380,20 +299,15 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
           .filter(Boolean)
       )
     );
-    if (pickupNoRestriction) {
-      setPickupSelections({});
-      setPickupKeywords([]);
-    } else {
-      setPickupSelections(serializeSelectionMap(workingPickupA));
-      setPickupKeywords(words);
-    }
+    const pickupAOut = serializeSelectionMap(workingPickupA);
+    setPickupSelections(pickupAOut);
+    setPickupKeywords(words);
     const parsedKm = Number(maxPickupKmText.trim().replace(',', '.'));
     const maxKm = Number.isFinite(parsedKm) && parsedKm > 0 ? parsedKm : 0;
     setMaxPickupKm(maxKm);
-    setAllowPickupWhenKmMissing(allowMissingKm);
+    setAllowPickupWhenKmMissing(true);
 
-    const pickupAOut = pickupNoRestriction ? {} : serializeSelectionMap(workingPickupA);
-    const hasPickupLoc = Object.keys(pickupAOut).length > 0 || (!pickupNoRestriction && words.length > 0);
+    const hasPickupLoc = Object.keys(pickupAOut).length > 0 || words.length > 0;
     const hasPickupKm = maxKm > 0;
 
     const dropAOut = serializeSelectionMap(workingDropA);
@@ -401,10 +315,10 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     setRejectPickupSelections(serializeSelectionMap(workingPickupR));
     setRejectDropSelections(serializeSelectionMap(workingDropR));
 
-    if (!hasPickupLoc && !hasPickupKm) {
-      onSaved('Dhyan dein: PICKUP me KM ya Location/Naam me se kam se kam 1 set karein warna clicker kaam nahi karega');
-    } else if (Object.keys(dropAOut).length === 0) {
+    if (Object.keys(dropAOut).length === 0) {
       onSaved('Dhyan dein: Drop (A) set kiye bina koi bhi order auto-accept nahi hoga');
+    } else if (!hasPickupLoc && !hasPickupKm) {
+      onSaved('Saved! Pickup: Kahin se bhi aur kitni bhi door se uthega');
     } else {
       onSaved('Saved (A, R & Distance rules updated)');
     }
@@ -416,6 +330,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
   const dropRCount = countMapEntries(workingDropR);
   const parsedPreviewKm = Number(maxPickupKmText.trim().replace(',', '.'));
   const activeMaxKm = Number.isFinite(parsedPreviewKm) && parsedPreviewKm > 0 ? parsedPreviewKm : 0;
+  const hasPickupLocInput = pickupACount > 0 || keywordsText.trim().length > 0;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
@@ -429,8 +344,11 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
             <span className="font-bold text-[#EF5350]">R</span> (Reject) boxes hain
           </p>
           <p className="font-mono-tabular mt-1 text-xs text-[#B0BEC5]">
-            Pickup: {pickupNoRestriction ? 'Location Off' : `${pickupACount} A`} / {pickupRCount} R
-            {activeMaxKm > 0 ? ` · <= ${activeMaxKm} km` : ''}
+            Pickup:{' '}
+            {!hasPickupLocInput && activeMaxKm <= 0
+              ? 'Kahin se bhi (Any KM)'
+              : `${hasPickupLocInput ? `${pickupACount} A` : 'Any Location'}${activeMaxKm > 0 ? ` · <= ${activeMaxKm} km` : ''}`}{' '}
+            / {pickupRCount} R
             <span aria-hidden="true"> · </span>
             Drop: {dropACount} A / {dropRCount} R
           </p>
@@ -484,126 +402,70 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
         />
       </div>
 
-      {/* Pickup restriction, distance & special keywords (only on PICKUP tab) */}
+      {/* Unified Pickup Filter Box (KM + Khaas Naam + Niche Location) */}
       {currentTab === 'PICKUP' && (
         <div className="mb-4 space-y-3 rounded-xl border border-white/10 bg-[#1E1E1E] p-4">
-          <label className="flex min-h-[40px] cursor-pointer items-center gap-3 text-sm font-medium text-white select-none">
-            <input
-              type="checkbox"
-              checked={pickupNoRestriction}
-              onChange={(e) => setPickupNoRestriction(e.target.checked)}
-              className="h-5 w-5 rounded accent-[#43A047]"
-            />
-            <span>Sirf Pickup KM use karein (Location / Khas Naam band)</span>
-          </label>
-
-          {/* Pickup Max Distance (KM) */}
-          <div className="rounded-lg border border-white/10 bg-[#171717] p-3">
-            <p className="mb-2 text-xs font-semibold text-[#81C784]">
-              Pickup Max Distance (KM) — order card par Pickup ke aage likha (2.9 km) padhta hai:
+          <div>
+            <p className="text-xs font-semibold text-[#81C784]">
+              Pickup Filter (KM + Khaas Naam + Niche Location) — sab ek jagah:
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="number"
-                min="0"
-                step="0.1"
-                value={maxPickupKmText}
-                onChange={(e) => setMaxPickupKmText(e.target.value)}
-                placeholder="Jaise: 2, 3 ya 3.5 (khaali = off)"
-                className="font-mono-tabular h-10 min-w-[160px] flex-1 rounded-lg border border-white/10 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
-              />
+            <p className="mt-0.5 text-[11px] text-[#B0BEC5]">
+              Location set ho to location se, KM set ho to KM meter se, aur dono khaali hon to Pickup kahin se bhi aur kitni bhi door se uth sakta hai.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={maxPickupKmText}
+              onChange={(e) => setMaxPickupKmText(e.target.value)}
+              placeholder="Pickup Max KM (jaise: 2, 3 ya 3.5 — khaali = koi limit nahi)"
+              className="font-mono-tabular h-10 min-w-[160px] flex-1 rounded-lg border border-white/10 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => setMaxPickupKmText('')}
+              className={`h-10 rounded-lg border px-3 text-xs font-bold transition-colors ${
+                activeMaxKm <= 0
+                  ? 'border-[#EF5350] bg-[#C62828] text-white'
+                  : 'border-white/15 bg-[#2A2A2A] text-[#B0BEC5] hover:text-white'
+              }`}
+            >
+              OFF
+            </button>
+            {[0.5, 0.6, 1, 2, 3, 5].map((km) => (
               <button
+                key={km}
                 type="button"
-                onClick={() => setMaxPickupKmText('')}
+                onClick={() => setMaxPickupKmText(String(km))}
                 className={`h-10 rounded-lg border px-3 text-xs font-bold transition-colors ${
-                  activeMaxKm <= 0
-                    ? 'border-[#EF5350] bg-[#C62828] text-white'
+                  activeMaxKm === km
+                    ? 'border-[#81C784] bg-[#43A047] text-white'
                     : 'border-white/15 bg-[#2A2A2A] text-[#B0BEC5] hover:text-white'
                 }`}
               >
-                OFF
+                {km}km
               </button>
-              {[0.5, 0.6, 1, 2, 3, 5].map((km) => (
-                <button
-                  key={km}
-                  type="button"
-                  onClick={() => setMaxPickupKmText(String(km))}
-                  className={`h-10 rounded-lg border px-3 text-xs font-bold transition-colors ${
-                    activeMaxKm === km
-                      ? 'border-[#81C784] bg-[#43A047] text-white'
-                      : 'border-white/15 bg-[#2A2A2A] text-[#B0BEC5] hover:text-white'
-                  }`}
-                >
-                  {km}km
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-[11px] text-[#9E9E9E]">
-              Pickup me KM ya Location/Naam me se koi EK bhi set ho to clicker chalega; agar DONO save hain to dono match hone par hi order uthega (Drop ka km kabhi Pickup me nahi gina jayega).
-            </p>
-            <label className="mt-2.5 flex min-h-[36px] cursor-pointer items-center gap-2.5 text-xs font-medium text-[#E0E0E0] select-none">
-              <input
-                type="checkbox"
-                checked={allowMissingKm}
-                onChange={(e) => setAllowMissingKm(e.target.checked)}
-                className="h-4 w-4 rounded accent-[#43A047]"
-              />
-              <span>Agar order card par Pickup ke aage KM na likha ho to bhi Drop match par uthaye</span>
-            </label>
-            {activeMaxKm > 0 && dropACount === 0 && (
-              <p className="mt-1.5 text-xs font-semibold text-[#FFB74D]">
-                Dhyan dein: DROP tab me kam se kam 1 Drop area (A) select karein, warna koi order nahi uthega.
-              </p>
-            )}
+            ))}
           </div>
 
-          <div>
-            <p className="mb-1.5 text-xs leading-relaxed text-[#FFB74D]">
-              Khaas jagah ke naam (comma se alag). Inme se koi EK bhi pickup me mile to order chalega.
+          <input
+            type="text"
+            value={keywordsText}
+            onChange={(e) => setKeywordsText(e.target.value)}
+            placeholder="Khaas jagah ke naam (jaise: Mote Lala, Gurudwara, Lal Qila, Metro)"
+            className="h-10 w-full rounded-lg border border-white/10 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#BDBDBD] focus:border-[#43A047] focus:outline-none"
+          />
+
+          {activeMaxKm > 0 && dropACount === 0 && (
+            <p className="text-xs font-semibold text-[#FFB74D]">
+              Dhyan dein: DROP tab me kam se kam 1 Drop area (A) select karein, warna koi order nahi uthega.
             </p>
-            <textarea
-              rows={2}
-              value={keywordsText}
-              onChange={(e) => {
-                const val = e.target.value;
-                setKeywordsText(val);
-                if (val.trim() && pickupNoRestriction) {
-                  setPickupNoRestriction(false);
-                }
-              }}
-              placeholder="Jaise: Mote Lala, Gurudwara, Lal Qila, Metro"
-              className="w-full rounded-lg border border-white/10 bg-[#2A2A2A] p-3 text-sm text-white placeholder-[#BDBDBD] focus:border-[#43A047] focus:outline-none"
-            />
-          </div>
+          )}
         </div>
       )}
-
-      {/* Custom Folder Actions */}
-      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => {
-            if (flattenedTicked.length === 0) {
-              onNotify('Pehle niche kisi city ke andar A ya R tick karo, phir ye button dabao');
-              return;
-            }
-            setShowTickedFolderModal(true);
-          }}
-          className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#1E1E1E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#2A2A2A]"
-        >
-          <Check className="h-4 w-4 text-[#5AD278]" />
-          <span>Tick kiye hue se Naya Folder Banayein</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setShowCreateFolderModal(true)}
-          className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#1E1E1E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#2A2A2A]"
-        >
-          <FolderPlus className="h-4 w-4 text-[#FFB74D]" />
-          <span>+ Naya Folder (naam type karke)</span>
-        </button>
-      </div>
 
       {/* Quick-add unmatched query to any city with A or R */}
       {rawQuery && !exactMatchExists && (
@@ -905,81 +767,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Create Folder from Ticked Items */}
-      {showTickedFolderModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#1E1E1E] p-6">
-            <h2 className="font-display text-lg font-bold text-white">
-              Naya Folder - Tick ki hui {flattenedTicked.length} jagah
-            </h2>
-            <p className="mt-2 max-h-28 overflow-y-auto text-xs text-[#BDBDBD]">
-              {flattenedTicked.join(', ')}
-            </p>
-            <input
-              type="text"
-              value={tickedFolderName}
-              onChange={(e) => setTickedFolderName(e.target.value)}
-              placeholder="Folder ka naam (jaise: Yash Delhi)"
-              className="mt-4 h-11 w-full rounded-lg border border-white/15 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
-            />
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowTickedFolderModal(false)}
-                className="min-h-[40px] rounded-lg px-4 py-2 text-sm font-medium text-[#B0BEC5] hover:bg-white/5"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleCreateFromTicked}
-                className="min-h-[40px] rounded-lg bg-[#43A047] px-4 py-2 text-sm font-bold text-white hover:bg-[#388E3C]"
-              >
-                Banao
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Create Folder by Typing Places */}
-      {showCreateFolderModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#1E1E1E] p-6">
-            <h2 className="font-display text-lg font-bold text-white">Naya Folder</h2>
-            <input
-              type="text"
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder="Folder ka naam (jaise: Yash Central Delhi)"
-              className="mt-4 h-11 w-full rounded-lg border border-white/15 bg-[#2A2A2A] px-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
-            />
-            <textarea
-              rows={5}
-              value={newFolderPlaces}
-              onChange={(e) => setNewFolderPlaces(e.target.value)}
-              placeholder="Jagah ke naam, comma ya nayi line se alag karo&#10;(jaise: Chandni Chowk, Lal Qila, Nehru Place)"
-              className="mt-3 w-full rounded-lg border border-white/15 bg-[#2A2A2A] p-3 text-sm text-white placeholder-[#9E9E9E] focus:border-[#43A047] focus:outline-none"
-            />
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowCreateFolderModal(false)}
-                className="min-h-[40px] rounded-lg px-4 py-2 text-sm font-medium text-[#B0BEC5] hover:bg-white/5"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleCreateCustomFolder}
-                className="min-h-[40px] rounded-lg bg-[#43A047] px-4 py-2 text-sm font-bold text-white hover:bg-[#388E3C]"
-              >
-                Banao
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

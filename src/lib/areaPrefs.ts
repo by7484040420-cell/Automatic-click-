@@ -649,22 +649,6 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
   const hasPickupLoc = hasPickupCities || hasKeywords;
   const hasDistanceRule = maxPickupKm > 0;
 
-  if (!hasPickupLoc && !hasDistanceRule) {
-    return {
-      matched: false,
-      rejected: false,
-      rejectedBy: null,
-      reason: 'Pickup: ABHI SET NAHI HAI (KM ya Location/Naam me se kam se kam 1 set karein)',
-      pickupText,
-      dropText,
-      pickupDistanceKm,
-      isTripDetails: false,
-      hasAcceptWord,
-      pickupMatchedBy: null,
-      dropMatchedBy: dropHit,
-    };
-  }
-
   let locHitLabel: string | null = null;
   if (hasPickupLoc) {
     if (hasPickupCities) {
@@ -719,7 +703,8 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     }
   }
 
-  const pickupLabel = [locHitLabel, kmHitLabel].filter(Boolean).join(' + ');
+  const pickupLabel =
+    [locHitLabel, kmHitLabel].filter(Boolean).join(' + ') || 'Kahin se bhi (any distance)';
   return {
     matched: true,
     rejected: false,

@@ -198,15 +198,9 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
 
       {/* Rules Summary Box (A, R & Distance rules) */}
       <div className="rounded-xl border border-white/10 bg-[#1E1E1E] p-4 text-sm leading-relaxed">
-        <p
-          className={
-            pickupACount === 0 && pickupKeywords.length === 0 && maxPickupKm <= 0
-              ? 'font-medium text-[#FFB74D]'
-              : 'text-[#B0BEC5]'
-          }
-        >
+        <p className="text-[#B0BEC5]">
           {pickupACount === 0 && pickupKeywords.length === 0 && maxPickupKm <= 0
-            ? 'Pickup (A): ABHI SET NAHI HAI (KM ya Location/Naam set karein)'
+            ? 'Pickup (A): Kahin se bhi (any distance)'
             : (pickupACount > 0 || pickupKeywords.length > 0) && maxPickupKm > 0
               ? `Pickup (A): ${[
                   pickupACount > 0 ? `${pickupACount} city set` : '',

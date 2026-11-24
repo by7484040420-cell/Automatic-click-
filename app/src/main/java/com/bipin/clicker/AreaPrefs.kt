@@ -299,9 +299,6 @@ object AreaPrefs {
         val hasPickupLoc = pickupSelections.isNotEmpty() || pickupKeywords.isNotEmpty()
         val hasPickupKm = maxPickupKm > 0f
 
-        // Pickup me kam se kam KM ya Location/Naam me se KOI EK set hona zaroori hai
-        if (!hasPickupLoc && !hasPickupKm) return false
-
         val fullNorm = normalize(rawScreenText)
         // splitOrder ek hi baar chalao
         val (pickupText, dropText) = splitOrder(rawScreenText)
@@ -320,6 +317,7 @@ object AreaPrefs {
         // - Sirf KM set ho -> KM match
         // - Sirf Location/Naam set ho -> Location/Naam match
         // - DONO set hon -> DONO (Location/Naam AUR KM) match hone par hi order uthega
+        // - DONO me kuchh bhi set na ho -> Pickup kahin se bhi aur kitni bhi door se uthega
         val locMatched = !hasPickupLoc ||
             (pickupSelections.isNotEmpty() && selectionsMatchText(context, pickupSelections, pickupText, fullNorm)) ||
             keywordMatches(pickupKeywords, pickupText)

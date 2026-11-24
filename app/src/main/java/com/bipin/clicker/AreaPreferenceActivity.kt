@@ -1,5 +1,6 @@
 package com.bipin.clicker
 
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -34,7 +35,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
     private val workingDropA = mutableMapOf<String, MutableSet<String>>()
     private val workingPickupR = mutableMapOf<String, MutableSet<String>>()
     private val workingDropR = mutableMapOf<String, MutableSet<String>>()
-    private var pickupNoRestriction = false
 
     private val expandedCities = mutableSetOf<String>()
     private val searchHandler = Handler(Looper.getMainLooper())
@@ -53,9 +53,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
         loadWorkingStateFrom(AreaPrefs.getRejectPickupSelections(this), workingPickupR)
         loadWorkingStateFrom(AreaPrefs.getRejectDropSelections(this), workingDropR)
 
-        pickupNoRestriction = AreaPrefs.getPickupSelections(this).isEmpty() &&
-            AreaPrefs.getPickupKeywords(this).isEmpty() &&
-            AreaPrefs.getMaxPickupKm(this) > 0f
         binding.pickupKeywords.setText(AreaPrefs.getPickupKeywords(this).joinToString(", "))
         val savedMaxKm = AreaPrefs.getMaxPickupKm(this)
         binding.etMaxPickupKm.setText(
@@ -65,7 +62,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 ""
             }
         )
-        binding.cbAllowMissingKm.isChecked = AreaPrefs.isAllowPickupWhenKmMissing(this)
 
         binding.btnDistOff.setOnClickListener { binding.etMaxPickupKm.setText("") }
         binding.btnDist05.setOnClickListener { binding.etMaxPickupKm.setText("0.5") }
@@ -74,23 +70,17 @@ class AreaPreferenceActivity : AppCompatActivity() {
         binding.btnDist2.setOnClickListener { binding.etMaxPickupKm.setText("2") }
         binding.btnDist3.setOnClickListener { binding.etMaxPickupKm.setText("3") }
         binding.btnDist5.setOnClickListener { binding.etMaxPickupKm.setText("5") }
-
-        binding.pickupKeywords.addTextChangedListener(object : TextWatcher {
+        binding.etMaxPickupKm.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (!s.isNullOrBlank() && binding.cbNoPickupRestriction.isChecked) {
-                    binding.cbNoPickupRestriction.isChecked = false
-                }
+                refreshDistanceButtons()
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        refreshDistanceButtons()
 
         binding.btnTabPickup.setOnClickListener { switchTab(Tab.PICKUP) }
         binding.btnTabDrop.setOnClickListener { switchTab(Tab.DROP) }
-
-        binding.cbNoPickupRestriction.setOnCheckedChangeListener { _, checked ->
-            pickupNoRestriction = checked
-        }
 
         binding.btnSaveAreas.setOnClickListener { saveAndFinish() }
 
@@ -103,11 +93,8 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     workingDropA.clear()
                     workingPickupR.clear()
                     workingDropR.clear()
-                    pickupNoRestriction = true
                     binding.pickupKeywords.setText("")
                     binding.etMaxPickupKm.setText("")
-                    binding.cbNoPickupRestriction.isChecked = true
-                    binding.cbAllowMissingKm.isChecked = true
                     AreaPrefs.setPickupSelections(this, emptyMap())
                     AreaPrefs.setDropSelections(this, emptyMap())
                     AreaPrefs.setRejectPickupSelections(this, emptyMap())
@@ -155,11 +142,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
         currentTab = tab
         binding.btnTabPickup.alpha = if (tab == Tab.PICKUP) 1f else 0.5f
         binding.btnTabDrop.alpha = if (tab == Tab.DROP) 1f else 0.5f
-        binding.cbNoPickupRestriction.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
-        binding.pickupDistanceBox.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
-        binding.tvKeywordHelp.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
-        binding.pickupKeywords.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
-        binding.cbNoPickupRestriction.isChecked = pickupNoRestriction
+        binding.pickupFilterBox.visibility = if (tab == Tab.PICKUP) View.VISIBLE else View.GONE
         renderCities()
     }
 
@@ -169,11 +152,28 @@ class AreaPreferenceActivity : AppCompatActivity() {
     private fun activeRejectMap(): MutableMap<String, MutableSet<String>> =
         if (currentTab == Tab.PICKUP) workingPickupR else workingDropR
 
-    private fun ensurePickupAcceptActive() {
-        if (currentTab == Tab.PICKUP && pickupNoRestriction) {
-            pickupNoRestriction = false
-            binding.cbNoPickupRestriction.isChecked = false
+    private fun refreshDistanceButtons() {
+        val currentKm = binding.etMaxPickupKm.text?.toString()?.trim()?.replace(',', '.')?.toFloatOrNull() ?: 0f
+        val offColor = ColorStateList.valueOf(Color.parseColor("#2A2A2A"))
+        val activeGreen = ColorStateList.valueOf(Color.parseColor("#43A047"))
+        val activeRed = ColorStateList.valueOf(Color.parseColor("#C62828"))
+        binding.btnDistOff.backgroundTintList = if (currentKm <= 0f) activeRed else offColor
+        val presets = listOf(
+            binding.btnDist05 to 0.5f,
+            binding.btnDist06 to 0.6f,
+            binding.btnDist1 to 1f,
+            binding.btnDist2 to 2f,
+            binding.btnDist3 to 3f,
+            binding.btnDist5 to 5f,
+        )
+        for ((btn, kmVal) in presets) {
+            val isMatch = currentKm > 0f && kotlin.math.abs(currentKm - kmVal) < 0.001f
+            btn.backgroundTintList = if (isMatch) activeGreen else offColor
         }
+    }
+
+    private fun ensurePickupAcceptActive() {
+        // Unified mode: location & KM work together seamlessly without a toggle checkbox.
     }
 
     private fun styleModeBox(tv: TextView, isAcceptBox: Boolean, isActive: Boolean) {
@@ -234,15 +234,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#B0BEC5"))
             textSize = 12f
             setPadding(0, 4, 0, 10)
-        })
-
-        binding.cityContainer.addView(Button(this).apply {
-            text = "\u2713 Tick (A) kiye hue se Naya Folder Banayein"
-            setOnClickListener { showSaveTickedAsFolderDialog() }
-        })
-        binding.cityContainer.addView(Button(this).apply {
-            text = "+ Naya Folder (naam type karke)"
-            setOnClickListener { showCreateFolderDialog() }
         })
 
         if (rawQuery.isNotEmpty()) {
@@ -584,110 +575,25 @@ class AreaPreferenceActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSaveTickedAsFolderDialog() {
-        val map = activeAcceptMap()
-        val flattened = LinkedHashSet<String>()
-        for ((city, set) in map) {
-            if (set.contains(AreaPrefs.ALL_MARKER)) {
-                flattened.addAll(allCities[city].orEmpty())
-            } else {
-                flattened.addAll(set)
-            }
-        }
-        if (flattened.isEmpty()) {
-            Toast.makeText(
-                this,
-                "Pehle kisi location par [A] select karein, phir folder banayein",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-
-        val pad = (20 * resources.displayMetrics.density).toInt()
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad / 2, pad, 0)
-        }
-        box.addView(TextView(this).apply {
-            text = "Naya Folder - ${flattened.size} jagah"
-            textSize = 18f
-            setPadding(0, 0, 0, pad / 2)
-        })
-        val nameInput = EditText(this).apply {
-            hint = "Folder ka naam (jaise: Yash Delhi)"
-        }
-        box.addView(nameInput)
-
-        AlertDialog.Builder(this)
-            .setView(box)
-            .setPositiveButton("Banao") { _, _ ->
-                val name = nameInput.text.toString().trim()
-                if (name.isNotEmpty()) {
-                    AreaPrefs.addCustomLocalities(this, name, flattened.toList())
-                    allCities = LocationRepository.loadAllCitiesWithCustom(this)
-                    renderCities()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showCreateFolderDialog() {
-        val pad = (20 * resources.displayMetrics.density).toInt()
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad / 2, pad, 0)
-        }
-        val nameInput = EditText(this).apply { hint = "Folder ka naam" }
-        val placesInput = EditText(this).apply {
-            hint = "Jagah ke naam (comma ya nayi line se alag)"
-            minLines = 4
-            gravity = Gravity.TOP or Gravity.START
-            isSingleLine = false
-        }
-        box.addView(nameInput)
-        box.addView(placesInput)
-
-        AlertDialog.Builder(this)
-            .setView(box)
-            .setPositiveButton("Banao") { _, _ ->
-                val name = nameInput.text.toString().trim()
-                val places = placesInput.text.toString()
-                    .split(Regex("[,\n]+")).map { it.trim() }.filter { it.isNotEmpty() }
-                if (name.isNotEmpty() && places.isNotEmpty()) {
-                    AreaPrefs.addCustomLocalities(this, name, places)
-                    allCities = LocationRepository.loadAllCitiesWithCustom(this)
-                    renderCities()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     private fun saveAndFinish() {
         val words = binding.pickupKeywords.text.toString()
             .split(Regex("[,;\\n]+")).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        if (pickupNoRestriction) {
-            AreaPrefs.setPickupSelections(this, emptyMap())
-            AreaPrefs.setPickupKeywords(this, emptyList())
-        } else {
-            AreaPrefs.setPickupSelections(this, workingPickupA)
-            AreaPrefs.setPickupKeywords(this, words)
-        }
+        AreaPrefs.setPickupSelections(this, workingPickupA)
+        AreaPrefs.setPickupKeywords(this, words)
         val maxKm = binding.etMaxPickupKm.text.toString().trim().replace(',', '.').toFloatOrNull()?.coerceAtLeast(0f) ?: 0f
         AreaPrefs.setMaxPickupKm(this, maxKm)
-        AreaPrefs.setAllowPickupWhenKmMissing(this, binding.cbAllowMissingKm.isChecked)
+        AreaPrefs.setAllowPickupWhenKmMissing(this, true)
         AreaPrefs.setDropSelections(this, workingDropA)
         AreaPrefs.setRejectPickupSelections(this, workingPickupR)
         AreaPrefs.setRejectDropSelections(this, workingDropR)
 
-        val hasPickupLoc = !pickupNoRestriction && (workingPickupA.isNotEmpty() || words.isNotEmpty())
+        val hasPickupLoc = workingPickupA.isNotEmpty() || words.isNotEmpty()
         val hasPickupKm = maxKm > 0f
         val msg = when {
-            !hasPickupLoc && !hasPickupKm ->
-                "Saved! Dhyan dein: PICKUP me KM ya Location/Naam me se kam se kam 1 set karein warna clicker kaam nahi karega"
             workingDropA.isEmpty() ->
                 "Saved! Dhyan dein: DROP tab me kam se kam 1 area (A) select karein warna order nahi uthega"
+            !hasPickupLoc && !hasPickupKm ->
+                "Saved! Pickup: Kahin se bhi aur kitni bhi door se uthega"
             else ->
                 "Saved (A, R & Distance rules)"
         }
