@@ -118,7 +118,7 @@ object SwipeIndicator {
             val start = v.sx
             val end = v.ex
             val startTime = android.os.SystemClock.uptimeMillis()
-            val d = durationMs.coerceAtLeast(80L)
+            val d = durationMs.coerceAtLeast(35L)
             v.movingX = start
             v.invalidate()
             val r = object : Runnable {

@@ -36,24 +36,37 @@ class OrderWatcherService : AccessibilityService() {
         @Volatile
         var instance: OrderWatcherService? = null
 
-        private const val FAST_RETRY_MS = 15L
+        private const val FAST_RETRY_MS = 5L
         private const val FAST_RETRY_WINDOW_MS = 5200L
-        private const val CLICK_COOLDOWN_MS = 220L
-        private const val OCR_INTERVAL_MS = 450L
+        private const val RISE_WATCH_MS = 4L
+        private const val RISE_MAX_WAIT_MS = 95L
+        private const val CLICK_COOLDOWN_MS = 55L
+        private const val OCR_INTERVAL_MS = 180L
         // Ek order (popup) par fast retry limit
-        private const val MAX_TRIES_PER_POPUP = 3
-        // Swipe duration (ms): 140ms tez aur smooth drag taaki order aate hi turant accept ho
-        private const val SWIPE_MS = 140L
+        private const val MAX_TRIES_PER_POPUP = 4
+        // Swipe duration (ms): 45ms turbo drag taaki order aate hi millisecond me accept ho
+        private const val SWIPE_MS = 45L
 
         private val COUNTDOWN_STRIP_RE = Regex("accept\\s*in\\s*\\d+\\s*s?", RegexOption.IGNORE_CASE)
+        private val ACCEPT_TAIL_RE = Regex("\\|\\s*(?:accept|confirm|take\\s+order).*$", RegexOption.IGNORE_CASE)
 
-        private const val VERIFY_INTERVAL_MS = 220L
-        private const val VERIFY_MAX_ATTEMPTS = 8
+        private const val VERIFY_INTERVAL_MS = 65L
+        private const val VERIFY_MAX_ATTEMPTS = 10
 
         private val ACCEPT_WORDS = listOf(
             "accept", "confirm", "take order", "accept order", "accept now"
         )
     }
+
+    private data class PreMatchEntry(
+        val signature: String,
+        val matched: Boolean,
+        val firstSeenUptime: Long,
+        var lastSeenUptime: Long,
+        var lastSliderCenterY: Float,
+        var lastSliderWidth: Int,
+        var stableFrames: Int
+    )
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -67,8 +80,11 @@ class OrderWatcherService : AccessibilityService() {
     }
     private var retryUntil = 0L
     private var retryRunning = false
+    private var riseWatchUntil = 0L
+    private var riseWatchRunning = false
     private var lastActionAt = 0L
     private var lastSignature: String? = null
+    private var lastPreMatch: PreMatchEntry? = null
 
     private var verifyAttemptsLeft = 0
 
@@ -146,28 +162,45 @@ class OrderWatcherService : AccessibilityService() {
         if (AreaPrefs.isPaused(applicationContext)) return
         if (!LicenseManager.isActive(applicationContext)) return
         // Apne app ya keyboard typing events par scan mat chalao (lag bachane ke liye)
-        if (isIgnoredPackage(event.packageName?.toString())) return
-        if (isOwnAppInForeground()) return
+        val evPkg = event.packageName?.toString()
+        if (isIgnoredPackage(evPkg)) return
+        if (evPkg == packageName) return
 
         when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> scanNow(forceImmediate = true)
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_VIEW_SCROLLED,
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> scanNow()
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> scanNow(forceImmediate = false)
             else -> Unit
         }
     }
 
-    private fun scanNow() {
+    private fun computeCardSignature(pkg: String?, screenText: String): String {
+        val noCountdown = COUNTDOWN_STRIP_RE.replace(screenText, "accept in")
+        val noAcceptTail = ACCEPT_TAIL_RE.replace(noCountdown, "")
+        val cardCore = noAcceptTail.replace(Regex("\\|\\s*skip(?:\\s*x)?\\b", RegexOption.IGNORE_CASE), "").trim()
+        val keyBase = if (cardCore.length >= 8) cardCore else noCountdown
+        return "${pkg.orEmpty()}:${keyBase.hashCode()}"
+    }
+
+    private fun looksLikeOrderCardText(screenText: String): Boolean {
+        val raw = screenText.lowercase()
+        if (screenHasAcceptWord(raw)) return true
+        return raw.contains("pickup") ||
+            raw.contains("drop") ||
+            (raw.contains("km") && (raw.contains("₹") || raw.contains("rs") || raw.contains("india") || raw.contains("sector")))
+    }
+
+    private fun scanNow(forceImmediate: Boolean = false) {
         if (!LicenseManager.isActive(applicationContext)) return
         if (AreaPrefs.isPaused(applicationContext)) return
-        if (isOwnAppInForeground()) return
 
-        // FIX: itne events aate hain ki main thread jam ho jata tha -> gesture late/cancel
         val tNow = SystemClock.uptimeMillis()
-        if (tNow - lastScanAt < 15L) return
+        val hasWarmMatch = lastPreMatch?.let { it.matched && (tNow - it.lastSeenUptime) < 400L } == true
+        val minInterval = if (forceImmediate || hasWarmMatch) 0L else 4L
+        if (minInterval > 0L && tNow - lastScanAt < minInterval) return
         lastScanAt = tNow
 
         val roots = currentRoots()
@@ -178,8 +211,9 @@ class OrderWatcherService : AccessibilityService() {
                 val pk = root.packageName?.toString()
                 if (isIgnoredPackage(pk)) continue
 
-                val texts = mutableListOf<String>()
-                collectText(root, texts)
+                val texts = ArrayList<String>(24)
+                val acceptNodes = ArrayList<AccessibilityNodeInfo>(2)
+                collectOrderTree(root, texts, acceptNodes)
                 val screenText = texts.joinToString(" | ")
 
                 if (screenText.isBlank()) continue
@@ -191,40 +225,80 @@ class OrderWatcherService : AccessibilityService() {
                     continue
                 }
 
-                // Jab screen par naya order popup ("Accept in Ns" / Accept) ho tabhi match check karo
-                if (!screenHasAcceptWord(screenText)) continue
+                // Bottom/rising pre-read: agar card ka pickup/drop text dikh gaya ho (Accept slider
+                // poora aane se pehle bhi), to niche hi padh kar cache kar lo taaki upar aate hi 0ms swipe ho!
+                val hasAccept = acceptNodes.isNotEmpty() || screenHasAcceptWord(screenText)
+                if (!hasAccept && !looksLikeOrderCardText(screenText)) continue
 
-                if (!AreaPrefs.matchesScreenText(applicationContext, screenText)) {
-                    reportDebug(
-                        "Scan (${root.packageName}):\n\"${screenText.take(150)}\"\n-> NOT match"
+                val signature = computeCardSignature(pk, screenText)
+                val cached = lastPreMatch
+                val matched: Boolean
+                val entry: PreMatchEntry
+                if (cached != null && cached.signature == signature && (tNow - cached.lastSeenUptime) < 3500L) {
+                    matched = cached.matched
+                    cached.lastSeenUptime = tNow
+                    entry = cached
+                } else {
+                    matched = AreaPrefs.matchesScreenText(applicationContext, screenText)
+                    entry = PreMatchEntry(
+                        signature = signature,
+                        matched = matched,
+                        firstSeenUptime = tNow,
+                        lastSeenUptime = tNow,
+                        lastSliderCenterY = -1f,
+                        lastSliderWidth = 0,
+                        stableFrames = 0
                     )
+                    lastPreMatch = entry
+                    if (matched && !hasAccept) {
+                        // Card niche/animation me hi match ho gaya! Turant fast watch chalao
+                        setStatus("ORDER PRE-MATCHED")
+                        startRiseWatch()
+                    }
+                }
+
+                if (!matched) {
+                    if (hasAccept) {
+                        reportDebug(
+                            "Scan (${root.packageName}):\n\"${screenText.take(150)}\"\n-> NOT match"
+                        )
+                    }
                     continue
                 }
 
+                if (!hasAccept) continue
+
                 setStatus("ORDER FOUND")
 
-                val stableText = COUNTDOWN_STRIP_RE.replace(screenText, "accept in")
-                val signature = "${root.packageName}:${stableText.hashCode()}"
                 val now = System.currentTimeMillis()
-
                 if (verifyAttemptsLeft > 0 && signature == lastSignature) {
                     continue
                 }
 
-                // Every newly-seen order gets an immediate action attempt.
-                // Only apply short cooldown on the exact same signature; new orders fire immediately.
-                val sameOrderCooldownOk = (signature != lastSignature) || (now - treeDoneAt > 900L)
-                if (sameOrderCooldownOk && (signature != lastSignature || now - lastActionAt >= CLICK_COOLDOWN_MS)) {
-                    if (findAndAccept(root)) {
+                // Rising/scaling check: agar popup abhi chhota hai ya neeche se tez upar aa raha hai,
+                // to bina dobara text padhe 4ms me upar pahunchte hi TURBO swipe maaro!
+                if (shouldWaitForRise(acceptNodes, entry, tNow)) {
+                    startRiseWatch()
+                    continue
+                }
+
+                val isNewOrder = signature != lastSignature
+                if (isNewOrder) {
+                    // Har naye order par pehli koshish hamesha 45ms TURBO style A se ho!
+                    swipeTry = 0
+                }
+                val sameOrderCooldownOk = isNewOrder || (now - treeDoneAt > 350L)
+                if (sameOrderCooldownOk && (isNewOrder || now - lastActionAt >= CLICK_COOLDOWN_MS)) {
+                    if (acceptFromNodes(acceptNodes) || findAndAccept(root)) {
                         treeDoneAt = now
                         lastSignature = signature
                         lastActionAt = now
+                        riseWatchRunning = false
                         setStatus("ORDER UTHA RAHA")
-                        showDebugToast("SwiftGate: Order uthane ka action")
-                        reportDebug("ORDER UTHA RAHA - live Accept control par gesture bheja")
+                        reportDebug("ORDER UTHA RAHA - 45ms TURBO swipe bheja")
                         startVerifyRetry()
                     } else {
-                        reportDebug("Accept control nahi mila - live screen ko fast retry kar raha hoon")
+                        reportDebug("Accept control nahi mila - fast retry chal raha hai")
                         startFastRetry()
                     }
                 }
@@ -234,6 +308,89 @@ class OrderWatcherService : AccessibilityService() {
                 try { root.recycle() } catch (_: Exception) {}
             }
         }
+    }
+
+    private fun shouldWaitForRise(
+        acceptNodes: List<AccessibilityNodeInfo>,
+        entry: PreMatchEntry,
+        tNow: Long
+    ): Boolean {
+        val elapsed = tNow - entry.firstSeenUptime
+        if (elapsed >= RISE_MAX_WAIT_MS) return false
+        val primary = acceptNodes.firstOrNull() ?: return false
+        val sliderNode = findSliderLikeAncestor(primary) ?: primary
+        val r = Rect()
+        try {
+            sliderNode.getBoundsInScreen(r)
+        } catch (_: Exception) {
+            return false
+        }
+        if (r.isEmpty) return false
+
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels.toFloat()
+        val screenH = dm.heightPixels.toFloat()
+        val curY = r.exactCenterY()
+        val curW = r.width()
+        val prevY = entry.lastSliderCenterY
+        val prevW = entry.lastSliderWidth
+        entry.lastSliderCenterY = curY
+        entry.lastSliderWidth = curW
+
+        // Popup abhi chhota hai ("pop chhota ho kr bada ho raha hai")
+        if (curW < screenW * 0.46f) {
+            entry.stableFrames = 0
+            return true
+        }
+
+        // Popup abhi tezi se neeche se upar khisak raha hai (Y > 12px jump ya width badh rahi hai)
+        val risingUp = prevY > 0f && (prevY - curY) > 10f
+        val expanding = prevW > 0 && (curW - prevW) > 16
+        if (risingUp || expanding) {
+            entry.stableFrames = 0
+            return true
+        }
+
+        // Agar SwipeZone set hai aur slider abhi bahut neeche hai (<70ms hua hai), upar aane do
+        val zone = SwipeZone.get(applicationContext)
+        if (zone != null && curY > zone.y + screenH * 0.14f && elapsed < 75L) {
+            entry.stableFrames = 0
+            return true
+        }
+
+        // Pehle frame par ekdum bottom edge (>80% screen height) me dikha to 1-2 frame (<=24ms) dekho ki upar aa raha hai kya
+        if (prevY <= 0f && curY > screenH * 0.80f && elapsed < 28L) {
+            entry.stableFrames = 0
+            return true
+        }
+
+        entry.stableFrames++
+        return false
+    }
+
+    private val riseWatchRunnable = object : Runnable {
+        override fun run() {
+            if (AreaPrefs.isPaused(applicationContext) || !LicenseManager.isActive(applicationContext)) {
+                riseWatchRunning = false
+                return
+            }
+            if (SystemClock.uptimeMillis() > riseWatchUntil) {
+                riseWatchRunning = false
+                return
+            }
+            scanNow(forceImmediate = true)
+            if (riseWatchRunning) {
+                handler.postDelayed(this, RISE_WATCH_MS)
+            }
+        }
+    }
+
+    private fun startRiseWatch() {
+        riseWatchUntil = maxOf(riseWatchUntil, SystemClock.uptimeMillis() + 300L)
+        if (riseWatchRunning) return
+        riseWatchRunning = true
+        handler.removeCallbacks(riseWatchRunnable)
+        handler.postDelayed(riseWatchRunnable, RISE_WATCH_MS)
     }
 
     // ------------------------------------------------------------------
@@ -413,39 +570,48 @@ class OrderWatcherService : AccessibilityService() {
         })
     }
 
-    private fun findAndAccept(node: AccessibilityNodeInfo?): Boolean {
-        if (node == null) return false
+    private fun acceptFromNodes(acceptNodes: List<AccessibilityNodeInfo>): Boolean {
+        for (node in acceptNodes) {
+            if (tryAcceptNode(node)) return true
+        }
+        return false
+    }
 
+    private fun tryAcceptNode(node: AccessibilityNodeInfo): Boolean {
+        val swiped = swipeAcceptControl(node)
+        if (swiped) return true
+
+        if (geometricSlideFromNode(node)) return true
+        val zone = SwipeZone.get(applicationContext)
+        if (zone != null) {
+            val nodeRect = Rect()
+            try { node.getBoundsInScreen(nodeRect) } catch (_: Exception) {}
+            // Dual-Porter safety: Zone fallback sirf tab jab matched Accept node ke paas hi ho
+            val sameBand = nodeRect.isEmpty ||
+                kotlin.math.abs(zone.y - nodeRect.exactCenterY()) <= resources.displayMetrics.heightPixels * 0.14f
+            if (sameBand && slideGesture(0f, 0f, 0f, "ZONE")) return true
+        }
+
+        val clicked = clickNodeOrParent(node, tapFallback = true)
+        reportDebug("SWIPE dispatch nahi hua; CLICK fallback=$clicked")
+        return clicked
+    }
+
+    private fun isAcceptControlNode(node: AccessibilityNodeInfo): Boolean {
         val raw = nodeText(node).lowercase().trim()
+        if (raw.isEmpty() || raw.contains("pickup") || raw.contains("drop")) return false
         val compact = raw.replace(Regex("[^a-z0-9]+"), "")
-
-        // Match the actual Accept control, including the countdown label.
-        // "pickup" / "drop" are deliberately NOT accepted as matches.
-        val isAcceptNode = ACCEPT_WORDS.any { word ->
+        return ACCEPT_WORDS.any { word ->
             raw.contains(word) ||
                 compact.contains(word.replace(Regex("[^a-z0-9]+"), ""))
         }
+    }
 
-        if (isAcceptNode && !raw.contains("pickup") && !raw.contains("drop")) {
-            // The slider is the primary action.
-            val swiped = swipeAcceptControl(node)
-            reportDebug("Accept control mila. SWIPE dispatched=$swiped")
-            if (swiped) return true
+    private fun findAndAccept(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
 
-            if (geometricSlideFromNode(node)) return true
-            val zone = SwipeZone.get(applicationContext)
-            if (zone != null) {
-                val nodeRect = Rect()
-                try { node.getBoundsInScreen(nodeRect) } catch (_: Exception) {}
-                // Dual-Porter safety: Zone fallback sirf tab jab matched Accept node ke paas hi ho
-                val sameBand = nodeRect.isEmpty ||
-                    kotlin.math.abs(zone.y - nodeRect.exactCenterY()) <= resources.displayMetrics.heightPixels * 0.14f
-                if (sameBand && slideGesture(0f, 0f, 0f, "ZONE")) return true
-            }
-
-            val clicked = clickNodeOrParent(node, tapFallback = true)
-            reportDebug("SWIPE dispatch nahi hua; CLICK fallback=$clicked")
-            if (clicked) return true
+        if (isAcceptControlNode(node)) {
+            if (tryAcceptNode(node)) return true
         }
 
         for (i in 0 until node.childCount) {
@@ -543,8 +709,8 @@ class OrderWatcherService : AccessibilityService() {
         }
     }
 
-    /** ScreenWatcherService (MediaProjection) se aayi live frame par turant OCR. */
-    fun submitWatcherFrame(bmp: Bitmap) {
+    /** ScreenWatcherService (MediaProjection) se aayi live frame par turant cropped OCR. */
+    fun submitWatcherFrame(bmp: Bitmap, cropTop: Int = 0, cropBottom: Int = bmp.height) {
         if (!LicenseManager.isActive(applicationContext) ||
             AreaPrefs.isPaused(applicationContext) ||
             SystemClock.uptimeMillis() < slideInFlightUntil
@@ -559,7 +725,7 @@ class OrderWatcherService : AccessibilityService() {
             }
             ocrBusy = true
         }
-        ScreenOcrScanner.recognize(bmp) { res, _ ->
+        ScreenOcrScanner.recognizeRegion(bmp, cropTop, cropBottom) { res, _ ->
             handler.post {
                 ocrBusy = false
                 if (res != null) {
@@ -616,7 +782,17 @@ class OrderWatcherService : AccessibilityService() {
                 reportDebug("OCR: Ongoing trip card - yaha touch nahi")
                 continue
             }
-            if (AreaPrefs.matchesScreenText(applicationContext, cardText)) {
+            val ocrSig = computeCardSignature("ocr", cardText)
+            val cached = lastPreMatch
+            val isMatch = if (cached != null && cached.signature == ocrSig && (hb - cached.lastSeenUptime) < 3500L) {
+                cached.lastSeenUptime = hb
+                cached.matched
+            } else {
+                val m = AreaPrefs.matchesScreenText(applicationContext, cardText)
+                lastPreMatch = PreMatchEntry(ocrSig, m, hb, hb, candidate.box.exactCenterY(), res.bitmap.width, 0)
+                m
+            }
+            if (isMatch) {
                 matchedCard = candidate to cardText
                 break
             } else {
@@ -627,7 +803,10 @@ class OrderWatcherService : AccessibilityService() {
 
         if (verifyAttemptsLeft > 0) return
         val nowT = System.currentTimeMillis()
-        if (nowT - ocrLastSeenAt > 1800L) ocrAttempts = 0 // popup gayab hua tha -> naya order
+        if (nowT - ocrLastSeenAt > 1800L) {
+            ocrAttempts = 0 // popup gayab hua tha -> naya order
+            swipeTry = 0
+        }
         ocrLastSeenAt = nowT
         if (ocrAttempts >= MAX_TRIES_PER_POPUP) {
             // is order par koshish ho chuki; popup khatam hone tak kuch nahi karna
@@ -637,10 +816,19 @@ class OrderWatcherService : AccessibilityService() {
         // Pichla swipe abhi chal raha hai -> naya mat bhejo, aur koshish ginti me mat jodo
         if (SystemClock.uptimeMillis() < slideInFlightUntil) return
 
-        setStatus("ORDER FOUND")
-        ocrAttempts++
         val bmpW = res.bitmap.width.toFloat()
         val slider = ScreenOcrScanner.estimateSlider(res.bitmap, acceptLine.box)
+
+        // Agar OCR me slider abhi chhota dikh raha hai (< 44% width) aur ye pehli koshish hai,
+        // to pre-match cache ho chuka hai — 35ms me full-size hone par turant swipe ho jayega!
+        if (slider != null && slider.width() < bmpW * 0.44f && ocrAttempts == 0) {
+            setStatus("ORDER PRE-MATCHED")
+            startRiseWatch()
+            return
+        }
+
+        setStatus("ORDER FOUND")
+        ocrAttempts++
         val ok = if (slider != null) {
             val h = slider.height().toFloat()
             // Thumb ke THEEK upar se pakdo (pixel se mila)
@@ -664,7 +852,6 @@ class OrderWatcherService : AccessibilityService() {
         lastActionAt = System.currentTimeMillis()
         if (ok) {
             setStatus("ORDER UTHA RAHA")
-            showDebugToast("SwiftGate: OCR se order uthane ka action")
         }
     }
 
@@ -781,7 +968,7 @@ class OrderWatcherService : AccessibilityService() {
             return false
         }
 
-        if (bounds.width() < 200 || bounds.height() < 40) return false
+        if (bounds.width() < 140 || bounds.height() < 28) return false
 
         // The screenshot's control is a wide horizontal slider. Prefer the
         // actual thumb child; otherwise use a point about one thumb-radius
@@ -812,16 +999,14 @@ class OrderWatcherService : AccessibilityService() {
     private var lastSwipeResult = "-"
 
     /**
-     * Video se dikha: pehle wala "hold + drag" (2 gesture jodkar) me thumb sirf ~40px hilta tha,
-     * phir wapas laut jata tha. Is phone/app par shayad wo tareeka chalta nahi. Isliye ab har
-     * koshish me alag STYLE aazmata hai (A, B, C, D), jo chal jaye. Debug box me har koshish
-     * ka natija "[last: styleX ...]" me dikhta hai.
+     * Ultra-fast TURBO swipe: pehli koshish hamesha 45ms smooth multi-point drag se hoti hai
+     * taaki popup upar aate hi millisecond me order accept ho jaye aur koi aur rider na utha sake.
      */
     private fun slideGesture(startX0: Float, y0: Float, endX0: Float, info0: String): Boolean {
         if (!LicenseManager.isActive(applicationContext)) return false
         if (SwipeZone.isEditing()) {
             SwipeZone.closeEditor()
-            handler.postDelayed({ slideGesture(startX0, y0, endX0, info0) }, 120L)
+            handler.postDelayed({ slideGesture(startX0, y0, endX0, info0) }, 60L)
             return true
         }
 
@@ -829,10 +1014,7 @@ class OrderWatcherService : AccessibilityService() {
         val maxX = dm.widthPixels.toFloat() - 1f
         val maxY = dm.heightPixels.toFloat() - 1f
 
-        // FIX: pehle yahan sahi jagah (OCR/pixel se mili) pheink kar hamesha purani manual green
-        // line use hoti thi - wo slider se door thi, isliye swipe slider par girta hi nahi tha.
-        // Ab pehle live mili jagah use hoti hai; green zone sirf backup hai.
-        val auto = y0 > 0f && endX0 > startX0 + 150f
+        val auto = y0 > 0f && endX0 > startX0 + 130f
         val startX: Float
         val endX: Float
         val y: Float
@@ -854,7 +1036,7 @@ class OrderWatcherService : AccessibilityService() {
             src = "ZONE"
         }
 
-        if (endX <= startX + 150f) {
+        if (endX <= startX + 130f) {
             reportDebug("SWIPE ROKA: swipe line bahut chhoti hai")
             return false
         }
@@ -871,30 +1053,27 @@ class OrderWatcherService : AccessibilityService() {
             return false
         }
 
-        // FIX (video se): thumb finger ke saath thoda chalta tha par finger turant chhoot jata tha,
-        // isliye slider wapas laut jata tha. Ab insaan jaisa swipe: pehle thumb PAKDO (ruko),
-        // phir KHEECHO, phir END par thoda RUKO, tab chhodo. Har koshish me alag style.
         val style = swipeTry++ % 4
         val tag = "$src ${'A' + style}"
         val overshoot = (endX + 26f).coerceAtMost(maxX)
         val info = "$tag start=${startX.toInt()},${y.toInt()} end=${endX.toInt()} | $info0"
         val t0 = SystemClock.uptimeMillis()
-        slideInFlightUntil = t0 + 1500L
+        slideInFlightUntil = t0 + 450L
 
         fun fin(ok: Boolean, what: String) {
-            // thumb ko wapas laut'ne ka thoda time do, phir turant agli koshish
-            slideInFlightUntil = SystemClock.uptimeMillis() + 120L
+            slideInFlightUntil = SystemClock.uptimeMillis() + 25L
             lastSwipeResult = "$tag ${if (ok) "DONE" else what}"
             reportDebug("SWIPE $lastSwipeResult ${SystemClock.uptimeMillis() - t0}ms\n$info")
             if (ok) SoundPlayer.playOrderSound(applicationContext)
         }
 
         fun single(durationMs: Long, toX: Float): Boolean {
-            val endPos = (toX + 18f).coerceAtMost(maxX)
+            val endPos = (toX + 22f).coerceAtMost(maxX)
             val path = Path().apply {
                 moveTo(startX, y)
-                lineTo(startX + 4f, y)
-                lineTo((startX + endPos) * 0.5f, y)
+                lineTo(startX + 6f, y)
+                lineTo(startX + (endPos - startX) * 0.35f, y)
+                lineTo(startX + (endPos - startX) * 0.72f, y)
                 lineTo(endPos, y)
             }
             return dispatchGesture(
@@ -911,13 +1090,13 @@ class OrderWatcherService : AccessibilityService() {
 
         fun chain(holdMs: Long, dragMs: Long, endHoldMs: Long, toX: Float): Boolean {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return single(holdMs + dragMs + endHoldMs, toX)
-            val holdPath = Path().apply { moveTo(startX, y); lineTo(startX + 1f, y) }
+            val holdPath = Path().apply { moveTo(startX, y); lineTo(startX + 2f, y) }
             val s1 = GestureDescription.StrokeDescription(holdPath, 0L, holdMs, true)
             return dispatchGesture(
                 GestureDescription.Builder().addStroke(s1).build(),
                 object : GestureResultCallback() {
                     override fun onCompleted(g: GestureDescription?) {
-                        val dragPath = Path().apply { moveTo(startX + 1f, y); lineTo(toX, y) }
+                        val dragPath = Path().apply { moveTo(startX + 2f, y); lineTo(toX, y) }
                         val s2 = s1.continueStroke(dragPath, 0L, dragMs, true)
                         val ok2 = try {
                             dispatchGesture(
@@ -953,10 +1132,10 @@ class OrderWatcherService : AccessibilityService() {
 
         val dispatched = try {
             when (style) {
-                0 -> single(SWIPE_MS, endX)
-                1 -> single(185L, overshoot)
-                2 -> single(220L, overshoot)
-                else -> chain(40L, 160L, 35L, overshoot)
+                0 -> single(SWIPE_MS, overshoot)
+                1 -> single(65L, overshoot)
+                2 -> single(95L, overshoot)
+                else -> chain(15L, 85L, 20L, overshoot)
             }
         } catch (e: Exception) {
             reportDebug("SWIPE exception: ${e.message}")
@@ -964,7 +1143,6 @@ class OrderWatcherService : AccessibilityService() {
         }
 
         if (dispatched) {
-            reportDebug("SWIPE $tag TRYING\n$info")
             SwipeIndicator.animateSwipe(SWIPE_MS)
         } else {
             slideInFlightUntil = 0L
@@ -1040,6 +1218,48 @@ class OrderWatcherService : AccessibilityService() {
         }
 
         return best
+    }
+
+    private fun collectOrderTree(
+        node: AccessibilityNodeInfo?,
+        textsOut: MutableList<String>,
+        acceptNodesOut: MutableList<AccessibilityNodeInfo>
+    ) {
+        if (node == null) return
+
+        val txt = node.text?.toString()?.takeIf { it.isNotBlank() }
+        val desc = node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            node.hintText?.toString()?.takeIf { it.isNotBlank() }
+        } else null
+        val pane = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            node.paneTitle?.toString()?.takeIf { it.isNotBlank() }
+        } else null
+
+        if (txt != null) textsOut.add(txt)
+        if (desc != null) textsOut.add(desc)
+        if (hint != null) textsOut.add(hint)
+        if (pane != null) textsOut.add(pane)
+
+        if (txt != null || desc != null || hint != null) {
+            val combined = buildString {
+                if (txt != null) append(txt).append(' ')
+                if (desc != null) append(desc).append(' ')
+                if (hint != null) append(hint)
+            }.lowercase()
+            if (!combined.contains("pickup") && !combined.contains("drop")) {
+                val compact = combined.replace(Regex("[^a-z0-9]+"), "")
+                val hit = ACCEPT_WORDS.any { word ->
+                    combined.contains(word) || compact.contains(word.replace(Regex("[^a-z0-9]+"), ""))
+                }
+                if (hit) acceptNodesOut.add(node)
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = try { node.getChild(i) } catch (_: Exception) { null }
+            if (child != null) collectOrderTree(child, textsOut, acceptNodesOut)
+        }
     }
 
     private fun collectText(node: AccessibilityNodeInfo?, out: MutableList<String>) {

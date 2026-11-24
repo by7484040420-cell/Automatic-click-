@@ -133,10 +133,10 @@ class ScreenWatcherService : Service() {
         val img = try { rd.acquireLatestImage() } catch (_: Exception) { null } ?: return
         try {
             val now = SystemClock.uptimeMillis()
-            if (now - lastCheck < 16L) return
+            if (now - lastCheck < 6L) return
             lastCheck = now
             if (AreaPrefs.isPaused(this)) return
-            if (now - lastTrigger < 120L) return
+            if (now - lastTrigger < 45L) return
 
             val plane = img.planes[0]
             val buf = plane.buffer
@@ -144,7 +144,8 @@ class ScreenWatcherService : Service() {
             val pxStride = plane.pixelStride
             val w = img.width
             val h = img.height
-            if (!looksLikeSlider(buf, rowStride, pxStride, w, h)) return
+            val sliderBottomY = findSliderRow(buf, rowStride, pxStride, w, h)
+            if (sliderBottomY < 0) return
 
             lastTrigger = now
             val bw = rowStride / pxStride
@@ -163,7 +164,9 @@ class ScreenWatcherService : Service() {
             val bmp = if (full.width != w) Bitmap.createBitmap(full, 0, 0, w, h).also { full.recycle() } else full
             val svc = OrderWatcherService.instance
             if (svc != null) {
-                svc.submitWatcherFrame(bmp)
+                val cropTop = (sliderBottomY - (h * 0.62f).toInt()).coerceAtLeast(0)
+                val cropBottom = (sliderBottomY + (h * 0.08f).toInt()).coerceAtMost(h)
+                svc.submitWatcherFrame(bmp, cropTop, cropBottom)
             } else {
                 bmp.recycle()
             }
@@ -173,13 +176,17 @@ class ScreenWatcherService : Service() {
         }
     }
 
-    /** Neeche ke 70% me chauda rangeen pill (>=6 rows lagatar) dikhe to true. Sasta check - OCR baad me. */
-    private fun looksLikeSlider(buf: ByteBuffer, rowStride: Int, pxStride: Int, w: Int, h: Int): Boolean {
+    /**
+     * Neeche/beech me rangeen slider-pill (chhota ya bada >=34% width, >=2 rows) dikhte hi
+     * uski Y position lautata hai, taaki popup neeche se upar aate waqt hi OCR ho sake.
+     */
+    private fun findSliderRow(buf: ByteBuffer, rowStride: Int, pxStride: Int, w: Int, h: Int): Int {
         val stepX = 8
-        val stepY = 8
+        val stepY = 6
         var consecutive = 0
-        var y = (h * 0.30f).toInt()
-        val yEnd = (h * 0.97f).toInt()
+        var y = (h * 0.18f).toInt()
+        val yEnd = (h * 0.98f).toInt()
+        val minSpan = (w * 0.34f).toInt()
         while (y < yEnd) {
             var colored = 0
             var total = 0
@@ -192,7 +199,7 @@ class ScreenWatcherService : Service() {
                     val r = buf.get(pos).toInt() and 0xFF
                     val g = buf.get(pos + 1).toInt() and 0xFF
                     val b = buf.get(pos + 2).toInt() and 0xFF
-                    if (maxOf(r, g, b) - minOf(r, g, b) > 60) {
+                    if (maxOf(r, g, b) - minOf(r, g, b) > 55) {
                         colored++
                         if (first < 0) first = x
                         last = x
@@ -201,16 +208,16 @@ class ScreenWatcherService : Service() {
                 }
                 x += stepX
             }
-            val rowOk = total > 0 && colored * 2 >= total && (last - first) >= (w * 0.7f)
+            val rowOk = total > 0 && colored * 5 >= total * 2 && (last - first) >= minSpan
             if (rowOk) {
                 consecutive++
-                if (consecutive >= 4) return true
+                if (consecutive >= 2) return y + stepY * 4
             } else {
                 consecutive = 0
             }
             y += stepY
         }
-        return false
+        return -1
     }
 
     private fun cleanup() {

@@ -39,18 +39,47 @@ object ScreenOcrScanner {
 
     /** Pehle se bane bitmap (live screen frame) par OCR. */
     fun recognize(bmp: Bitmap, onResult: (Result?, String?) -> Unit) {
-        recognizer.process(InputImage.fromBitmap(bmp, 0))
+        recognizeRegion(bmp, 0, bmp.height, onResult)
+    }
+
+    /** Sirf popup card wale vertical slice par tez OCR; line boxes wapas full-screen coordinates me offset hote hain. */
+    fun recognizeRegion(bmp: Bitmap, cropTop: Int, cropBottom: Int, onResult: (Result?, String?) -> Unit) {
+        val top = cropTop.coerceIn(0, (bmp.height - 1).coerceAtLeast(0))
+        val bottom = cropBottom.coerceIn(top + 1, bmp.height)
+        val useCrop = (top > 0 || bottom < bmp.height) && (bottom - top) >= 80
+        val targetBmp = if (useCrop) {
+            try {
+                Bitmap.createBitmap(bmp, 0, top, bmp.width, bottom - top)
+            } catch (_: Exception) {
+                bmp
+            }
+        } else {
+            bmp
+        }
+        val offsetY = if (targetBmp !== bmp) top else 0
+
+        recognizer.process(InputImage.fromBitmap(targetBmp, 0))
             .addOnSuccessListener { text ->
+                if (targetBmp !== bmp) {
+                    try { targetBmp.recycle() } catch (_: Exception) {}
+                }
                 val lines = ArrayList<Line>()
                 for (block in text.textBlocks) {
                     for (line in block.lines) {
                         val box = line.boundingBox ?: continue
-                        lines.add(Line(line.text, Rect(box)))
+                        val shifted = Rect(box)
+                        if (offsetY != 0) shifted.offset(0, offsetY)
+                        lines.add(Line(line.text, shifted))
                     }
                 }
                 onResult(Result(bmp, lines), null)
             }
-            .addOnFailureListener { e -> onResult(null, "OCR fail: ${e.message}") }
+            .addOnFailureListener { e ->
+                if (targetBmp !== bmp) {
+                    try { targetBmp.recycle() } catch (_: Exception) {}
+                }
+                onResult(null, "OCR fail: ${e.message}")
+            }
     }
 
     /** Screenshot + OCR. Callback (result, errorMessage). Exactly ek hi non-null hoga. */
@@ -157,7 +186,7 @@ object ScreenOcrScanner {
         var bottom = cy
         while (bottom < h - 1 && isColored(bmp.getPixel(refX, bottom + 1))) bottom++
         val pillH = bottom - top
-        if (pillH < 40) return null
+        if (pillH < 26) return null
 
         val gapMax = (pillH * 1.3f).toInt()
         val y = (top + bottom) / 2
@@ -180,7 +209,7 @@ object ScreenOcrScanner {
         }
         right = last
 
-        if (right - left < pillH * 3) return null
+        if (right - left < pillH * 2.2f) return null
         return Rect(left, top, right, bottom)
     }
 }
