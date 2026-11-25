@@ -7,7 +7,7 @@ const DEFAULT_STATE: PermissionState = {
   overlay: true,
   notification: true,
   battery: true,
-  autostart: false,
+  autostart: true,
   manufacturer: 'Generic / Web',
 };
 
@@ -44,17 +44,16 @@ export function savePermissions(next: PermissionState): PermissionState {
   return next;
 }
 
-export function grantAllViaRoot(current: PermissionState): PermissionState {
-  return savePermissions({
-    ...current,
-    accessibility: true,
-    overlay: true,
-    notification: true,
-    battery: true,
-    autostart: true,
-  });
+export function isEverythingReady(p: PermissionState): boolean {
+  return p.accessibility && p.overlay && p.notification && p.battery && p.autostart;
 }
 
-export function isEverythingReady(p: PermissionState): boolean {
-  return p.accessibility && p.overlay && p.notification;
+export function getMissingSettings(p: PermissionState): string[] {
+  const missing: string[] = [];
+  if (!p.accessibility) missing.push('Accessibility Service');
+  if (!p.overlay) missing.push('Display over other apps');
+  if (!p.notification) missing.push('Notifications');
+  if (!p.battery) missing.push('Battery Unrestricted');
+  if (!p.autostart) missing.push('Autostart / Background');
+  return missing;
 }

@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#121212"
+    android:fillViewport="true">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
     android:padding="20dp">
 
     <TextView
@@ -13,7 +18,29 @@
         android:textColor="#FFFFFF"
         android:textSize="22sp"
         android:textStyle="bold"
-        android:paddingBottom="16dp" />
+        android:paddingBottom="6dp" />
+
+    <TextView
+        android:id="@+id/tvGateNotice"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Jab tak sabhi settings ON nahi hongi, tab tak Location set nahi hogi aur App OFF rahega."
+        android:textColor="#FFB74D"
+        android:textSize="13sp"
+        android:background="#1E1E1E"
+        android:padding="12dp" />
+
+    <Button
+        android:id="@+id/btnAutoSetup"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#43A047"
+        android:textColor="#FFFFFF"
+        android:textStyle="bold"
+        android:text="Auto Setup Chalayein (Ek-Ek Karke)" />
+
+    <View android:layout_width="match_parent" android:layout_height="16dp" />
 
     <!-- Accessibility -->
     <TextView
@@ -29,7 +56,7 @@
         android:layout_height="wrap_content"
         android:text="Accessibility Settings Kholein" />
 
-    <View android:layout_width="match_parent" android:layout_height="16dp" />
+    <View android:layout_width="match_parent" android:layout_height="14dp" />
 
     <!-- Overlay -->
     <TextView
@@ -45,7 +72,7 @@
         android:layout_height="wrap_content"
         android:text="Overlay Permission Kholein" />
 
-    <View android:layout_width="match_parent" android:layout_height="16dp" />
+    <View android:layout_width="match_parent" android:layout_height="14dp" />
 
     <!-- Notification -->
     <TextView
@@ -61,10 +88,43 @@
         android:layout_height="wrap_content"
         android:text="Notification Permission Allow Karein" />
 
+    <View android:layout_width="match_parent" android:layout_height="14dp" />
+
+    <!-- Battery Unrestricted -->
+    <TextView
+        android:id="@+id/statusBattery"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:paddingBottom="4dp" />
+    <Button
+        android:id="@+id/btnOpenBattery"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Battery Unrestricted Allow Karein" />
+
+    <View android:layout_width="match_parent" android:layout_height="14dp" />
+
+    <!-- Autostart / Background -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Phone Brand Autostart / Background (Xiaomi/Vivo/Oppo/etc.):"
+        android:textColor="#9E9E9E"
+        android:textSize="12sp"
+        android:paddingBottom="4dp" />
+    <Button
+        android:id="@+id/btnOpenAutostart"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Autostart / Background Settings Kholein" />
+
     <View
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:minHeight="20dp" />
 
     <Button
         android:id="@+id/btnDone"
@@ -73,3 +133,4 @@
         android:text="DONE / WAPAS JAYEIN" />
 
 </LinearLayout>
+</ScrollView>

@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  ChevronDown,
-  ChevronUp,
+  Lock,
   Play,
   ShieldAlert,
   Volume2,
@@ -12,11 +11,9 @@ import {
   getMaxPickupKm,
   getPickupKeywords,
   getPickupSelections,
-  getRejectDropSelections,
-  getRejectPickupSelections,
 } from '../lib/areaPrefs';
+import { getMissingSettings, isEverythingReady } from '../lib/permissionManager';
 import { playOrderSound } from '../lib/soundPlayer';
-import { isSwipeZoneSet } from '../lib/swipeZone';
 import type {
   LiveWatcherStatus,
   PermissionState,
@@ -29,15 +26,12 @@ interface MainDashboardProps {
   isRunning: boolean;
   watcherStatus: LiveWatcherStatus;
   bubbleRunning: boolean;
-  rootReady: boolean;
-  rootStateText: string;
-  screenWatcherRunning: boolean;
+  swipeZoneReady: boolean;
   debugOverlayEnabled: boolean;
   onToggleStartStop: () => void;
   onNavigate: (screen: ScreenId) => void;
+  onAutoFixSwipeZone: () => void;
   onToggleBubble: () => void;
-  onRunRootSetup: () => void;
-  onToggleScreenWatch: () => void;
   onToggleDebugOverlay: () => void;
   onSimulateWatcherAccept: (status: LiveWatcherStatus, debugMessage: string) => void;
 }
@@ -87,34 +81,27 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
   isRunning,
   watcherStatus,
   bubbleRunning,
-  rootReady,
-  rootStateText,
-  screenWatcherRunning,
+  swipeZoneReady,
   debugOverlayEnabled,
   onToggleStartStop,
   onNavigate,
+  onAutoFixSwipeZone,
   onToggleBubble,
-  onRunRootSetup,
-  onToggleScreenWatch,
   onToggleDebugOverlay,
   onSimulateWatcherAccept,
 }) => {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [sampleScreenText, setSampleScreenText] = useState(SAMPLE_ORDERS[0].text);
   const [scanAnimActive, setScanAnimActive] = useState(false);
+  const allReady = isEverythingReady(permissions);
+  const missingSettings = getMissingSettings(permissions);
 
   const pickupSelections = getPickupSelections();
   const dropSelections = getDropSelections();
-  const rejectPickupSelections = getRejectPickupSelections();
-  const rejectDropSelections = getRejectDropSelections();
   const pickupKeywords = getPickupKeywords();
   const maxPickupKm = getMaxPickupKm();
 
   const pickupACount = Object.keys(pickupSelections).length;
-  const pickupRCount = Object.keys(rejectPickupSelections).length;
   const dropACount = Object.keys(dropSelections).length;
-  const dropRCount = Object.keys(rejectDropSelections).length;
-  const swipeSet = isSwipeZoneSet();
 
   const liveAnalysis = useMemo(() => analyzeScreenText(sampleScreenText), [sampleScreenText]);
 
@@ -181,20 +168,22 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
       </div>
 
       {/* Conditional Permission Warnings */}
-      {(!permissions.accessibility || !permissions.overlay) && (
-        <div className="mb-4 space-y-2 rounded-xl border border-[#EF5350]/35 bg-[#1E1E1E] p-4">
-          {!permissions.accessibility && (
-            <p className="text-sm text-white">❌ Accessibility Service: OFF</p>
-          )}
-          {!permissions.overlay && (
-            <p className="text-sm text-white">❌ Overlay Permission: OFF</p>
-          )}
+      {!allReady && (
+        <div className="mb-4 space-y-1.5 rounded-xl border border-[#EF5350]/45 bg-[#1E1E1E] p-4">
+          <p className="text-xs font-semibold text-[#FFB74D]">
+            Jab tak sabhi settings ON nahi hongi, Location set nahi hogi aur App OFF rahega:
+          </p>
+          {missingSettings.map((item) => (
+            <p key={item} className="text-sm text-white">
+              ❌ {item}: OFF
+            </p>
+          ))}
           <button
             type="button"
             onClick={() => onNavigate('permissions')}
-            className="mt-2 min-h-[42px] w-full rounded-lg bg-[#2A2A2A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#363636]"
+            className="mt-2 min-h-[42px] w-full rounded-lg bg-[#E65100] px-4 py-2 text-sm font-bold text-white hover:bg-[#D84315]"
           >
-            Setup Pura Karein (kuch permission baaki hai)
+            Sabhi Settings ON Karein (Setup Baaki Hai)
           </button>
         </div>
       )}
@@ -219,9 +208,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
                 ]
                   .filter(Boolean)
                   .join(' · ')}`}
-          {pickupRCount > 0 && (
-            <span className="ml-2 text-[#EF5350]">· Reject (R): {pickupRCount} city</span>
-          )}
         </p>
         <p
           className={`mt-1 ${
@@ -231,11 +217,6 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
           {dropACount === 0
             ? 'Drop (A): ABHI SET NAHI HAI (kuch bhi accept nahi hoga)'
             : `Drop (A): ${dropACount} city set`}
-          {dropRCount > 0 && (
-            <span className="ml-2 font-normal text-[#EF5350]">
-              · Reject (R): {dropRCount} city
-            </span>
-          )}
         </p>
       </div>
 
@@ -250,23 +231,49 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
               : 'bg-[#C62828] hover:bg-[#B71C1C]'
           }`}
         >
-          {!permissions.accessibility ? 'START' : isPaused ? '○ OFF' : '● ON'}
+          {!allReady || isPaused ? '○ OFF' : '● ON'}
         </button>
 
         <button
           type="button"
           onClick={() => onNavigate('areas')}
-          className="flex min-h-[72px] items-center justify-center rounded-xl bg-[#2A2A2A] px-2 text-sm font-bold tracking-wide text-white transition-colors hover:bg-[#363636]"
+          className={`flex min-h-[72px] items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-bold tracking-wide text-white transition-colors ${
+            allReady
+              ? 'bg-[#5E35B1] hover:bg-[#512DA8]'
+              : 'bg-[#424242] opacity-75 hover:bg-[#4F4F4F]'
+          }`}
         >
-          LOCATION (A / R)
+          {!allReady && <Lock className="h-4 w-4 shrink-0" />}
+          <span>LOCATION (ACCEPT)</span>
         </button>
 
         <button
           type="button"
-          onClick={() => onNavigate('swipe')}
-          className="flex min-h-[72px] items-center justify-center rounded-xl bg-[#2A2A2A] px-2 text-sm font-bold tracking-wide text-white transition-colors hover:bg-[#363636]"
+          onClick={onAutoFixSwipeZone}
+          className={`flex min-h-[72px] items-center justify-center rounded-xl px-2 text-sm font-bold tracking-wide text-white transition-colors ${
+            allReady
+              ? 'bg-[#5E35B1] hover:bg-[#512DA8]'
+              : 'bg-[#424242] opacity-75 hover:bg-[#4F4F4F]'
+          }`}
         >
-          {swipeSet ? 'SWIPE ZONE ✅' : 'SWIPE ZONE'}
+          {swipeZoneReady ? 'SWIPE ZONE ✅' : 'SWIPE ZONE'}
+        </button>
+      </div>
+
+      {/* Floating Bubble Button moved up directly below primary controls */}
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={onToggleBubble}
+          className={`min-h-[46px] w-full rounded-xl px-4 py-2.5 text-sm font-bold text-white transition-colors ${
+            bubbleRunning
+              ? 'bg-[#2E7D32] hover:bg-[#1B5E20]'
+              : 'bg-[#5E35B1] hover:bg-[#512DA8]'
+          }`}
+        >
+          {bubbleRunning
+            ? '✅ Floating Bubble: ON (Auto)'
+            : 'Floating Bubble: OFF (ON Karein)'}
         </button>
       </div>
 
@@ -390,65 +397,15 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
         )}
       </div>
 
-      {/* Collapsible Advanced Section */}
-      <div className="mt-5">
+      {/* Debug Overlay Toggle */}
+      <div className="mt-4">
         <button
           type="button"
-          onClick={() => setAdvancedOpen((prev) => !prev)}
-          className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-medium text-[#9E9E9E] transition-colors hover:bg-white/5 hover:text-white"
+          onClick={onToggleDebugOverlay}
+          className="min-h-[42px] w-full rounded-xl border border-white/10 bg-[#1E1E1E] px-4 py-2 text-xs font-semibold text-[#9E9E9E] hover:bg-[#2A2A2A] hover:text-white"
         >
-          <span>Advanced</span>
-          {advancedOpen ? (
-            <ChevronUp className="h-4 w-4" />
-          ) : (
-            <ChevronDown className="h-4 w-4" />
-          )}
+          {debugOverlayEnabled ? 'Debug Overlay BAND Karein' : 'Debug Overlay ON Karein'}
         </button>
-
-        {advancedOpen && (
-          <div className="mt-2 space-y-3 rounded-2xl border border-white/10 bg-[#1E1E1E] p-4">
-            <button
-              type="button"
-              onClick={onToggleBubble}
-              className="min-h-[44px] w-full rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
-            >
-              {bubbleRunning ? 'Floating Bubble Band Karein' : 'Floating Bubble ON Karein'}
-            </button>
-
-            <div className="rounded-xl bg-[#141414] p-3 text-sm text-white">
-              <p>
-                {rootReady ? '✅ ' : '❌ '}Root: {rootStateText}
-              </p>
-              <p className="mt-1">
-                {screenWatcherRunning ? '✅ Screen Watcher: ON' : '❌ Screen Watcher: OFF'}
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={onRunRootSetup}
-              className="min-h-[44px] w-full rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
-            >
-              Root: Auto Permissions
-            </button>
-
-            <button
-              type="button"
-              onClick={onToggleScreenWatch}
-              className="min-h-[44px] w-full rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
-            >
-              {screenWatcherRunning ? 'Screen Watcher BAND Karein' : 'Screen Watcher ON Karein'}
-            </button>
-
-            <button
-              type="button"
-              onClick={onToggleDebugOverlay}
-              className="min-h-[44px] w-full rounded-xl bg-[#2A2A2A] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#363636]"
-            >
-              {debugOverlayEnabled ? 'Debug Overlay BAND Karein' : 'Debug Overlay ON Karein'}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

@@ -62,6 +62,12 @@ class FloatingBubbleService : Service() {
             return
         }
 
+        if (!PermissionManager.isEverythingReady(this)) {
+            AreaPrefs.setPaused(this, true)
+            stopSelf()
+            return
+        }
+
         setRunningFlag(true)
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
@@ -103,6 +109,7 @@ class FloatingBubbleService : Service() {
 
         val longPressRunnable = Runnable {
             longPressTriggered = true
+            AreaPrefs.setBubbleManuallyOff(this, true)
             Toast.makeText(
                 this,
                 "SwiftGate bubble band kiya",
@@ -207,7 +214,12 @@ class FloatingBubbleService : Service() {
     }
 
     private fun openAreaSettings() {
-        val intent = Intent(this, AreaPreferenceActivity::class.java)
+        val targetCls = if (PermissionManager.isEverythingReady(this)) {
+            AreaPreferenceActivity::class.java
+        } else {
+            PermissionSetupActivity::class.java
+        }
+        val intent = Intent(this, targetCls)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         // FIX: background se direct startActivity kai phones (ColorOS/MIUI) par chup-chap block hota hai.
         try {

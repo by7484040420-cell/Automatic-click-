@@ -5,7 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.graphics.Bitmap
+import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
@@ -22,9 +22,6 @@ import androidx.core.app.NotificationCompat
 
 /**
  * Reads the live order screen and tries the accept control as soon as it is actionable.
- *
- * Restored immediate-trigger OrderWatcherService (instant scan on event, 0ms deferral,
- * 15ms fast retry, 30ms swipe) with ScreenWatcherService & prewarm compatibility.
  */
 class OrderWatcherService : AccessibilityService() {
 
@@ -107,6 +104,7 @@ class OrderWatcherService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         SwipeZone.service = this
+        SwipeZone.ensureAutoCalibrated(applicationContext)
         Thread {
             try {
                 AreaPrefs.prewarm(applicationContext)
@@ -116,9 +114,23 @@ class OrderWatcherService : AccessibilityService() {
         }.start()
         handler.post(licenseRunnable)
         showOnNotification()
-        setStatus("READY")
+        setStatus(if (PermissionManager.isEverythingReady(applicationContext) && !AreaPrefs.isPaused(applicationContext)) "READY" else "OFF")
         // OCR loop: screen ke PIXELS se text padhta hai (photo/screenshot/camera me dikhi screen bhi)
         handler.postDelayed(ocrRunnable, 500L)
+
+        // Sabhi settings ready hon to Floating Bubble khud-ba-khud ON kar do
+        try {
+            if (PermissionManager.isEverythingReady(applicationContext) &&
+                !AreaPrefs.isBubbleManuallyOff(applicationContext) &&
+                !PermissionManager.isFloatingBubbleRunning(applicationContext)
+            ) {
+                androidx.core.content.ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, FloatingBubbleService::class.java)
+                )
+            }
+        } catch (_: Exception) {
+        }
 
         // FIX (naya): runtime par check karo ki gesture injection ka permission
         // SAHI SE mila hai ya nahi. Agar false hai to service chal to rahi hai
@@ -159,6 +171,10 @@ class OrderWatcherService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        if (!PermissionManager.isEverythingReady(applicationContext)) {
+            if (!AreaPrefs.isPaused(applicationContext)) AreaPrefs.setPaused(applicationContext, true)
+            return
+        }
         if (AreaPrefs.isPaused(applicationContext)) return
         if (!LicenseManager.isActive(applicationContext)) return
         // Apne app ya keyboard typing events par scan mat chalao (lag bachane ke liye)
@@ -195,6 +211,7 @@ class OrderWatcherService : AccessibilityService() {
 
     private fun scanNow(forceImmediate: Boolean = false) {
         if (!LicenseManager.isActive(applicationContext)) return
+        if (!PermissionManager.isEverythingReady(applicationContext)) return
         if (AreaPrefs.isPaused(applicationContext)) return
 
         val tNow = SystemClock.uptimeMillis()
@@ -669,8 +686,7 @@ class OrderWatcherService : AccessibilityService() {
 
     private fun runOcrOnce() {
         if (!LicenseManager.isActive(applicationContext)) return
-        // Jab ScreenWatcher chal raha ho to slow takeScreenshot() mat chalao
-        if (ScreenWatcherService.running) return
+        if (!PermissionManager.isEverythingReady(applicationContext)) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             if (!ocrNoSupportShown) {
                 ocrNoSupportShown = true
@@ -704,40 +720,6 @@ class OrderWatcherService : AccessibilityService() {
                     } finally {
                         try { res.bitmap.recycle() } catch (_: Exception) {}
                     }
-                }
-            }
-        }
-    }
-
-    /** ScreenWatcherService (MediaProjection) se aayi live frame par turant cropped OCR. */
-    fun submitWatcherFrame(bmp: Bitmap, cropTop: Int = 0, cropBottom: Int = bmp.height) {
-        if (!LicenseManager.isActive(applicationContext) ||
-            AreaPrefs.isPaused(applicationContext) ||
-            SystemClock.uptimeMillis() < slideInFlightUntil
-        ) {
-            try { bmp.recycle() } catch (_: Exception) {}
-            return
-        }
-        synchronized(ocrLock) {
-            if (ocrBusy) {
-                try { bmp.recycle() } catch (_: Exception) {}
-                return
-            }
-            ocrBusy = true
-        }
-        ScreenOcrScanner.recognizeRegion(bmp, cropTop, cropBottom) { res, _ ->
-            handler.post {
-                ocrBusy = false
-                if (res != null) {
-                    try {
-                        handleOcr(res)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "watcher ocr handle error", e)
-                    } finally {
-                        try { res.bitmap.recycle() } catch (_: Exception) {}
-                    }
-                } else {
-                    try { bmp.recycle() } catch (_: Exception) {}
                 }
             }
         }
@@ -841,9 +823,9 @@ class OrderWatcherService : AccessibilityService() {
                 "SLIDER pixel se, try $ocrAttempts"
             )
         } else {
-            // Slider ka rang nahi pakda: white (>>) circle screen width ~15% par hota hai
+            // Slider ka rang nahi pakda: white (>>) circle screen width ~17% par hota hai
             slideGesture(
-                bmpW * 0.15f,
+                bmpW * 0.17f,
                 acceptLine.box.exactCenterY(),
                 bmpW * 0.90f,
                 "TEXT-y se, try $ocrAttempts"
@@ -927,8 +909,8 @@ class OrderWatcherService : AccessibilityService() {
         val r = Rect()
         try { node.getBoundsInScreen(r) } catch (_: Exception) { return false }
         if (r.width() <= 0 || r.height() <= 0 || r.height() > 300) return false
-        val w = resources.displayMetrics.widthPixels.toFloat()
-        return slideGesture(w * 0.15f, r.exactCenterY(), w * 0.90f, "GEOM text=$r")
+        val w = SwipeZone.getScreenDimensions(applicationContext).first.toFloat()
+        return slideGesture(w * 0.17f, r.exactCenterY(), w * 0.90f, "GEOM text=$r")
     }
 
     private fun tapNodeCenter(node: AccessibilityNodeInfo): Boolean {

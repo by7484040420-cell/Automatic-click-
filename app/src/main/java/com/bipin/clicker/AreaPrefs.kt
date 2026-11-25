@@ -28,6 +28,7 @@ object AreaPrefs {
     private const val KEY_PICKUP_KEYWORDS = "pickup_keywords"
     private const val KEY_MAX_PICKUP_KM = "max_pickup_km"
     private const val KEY_ALLOW_MISSING_KM = "allow_pickup_when_km_missing"
+    private const val KEY_BUBBLE_MANUAL_OFF = "bubble_manually_off"
 
     // v13 SPEED: selections + pause state memory me cache hain (0ms lookup)
     @Volatile private var isPausedCache: Boolean? = null
@@ -53,7 +54,14 @@ object AreaPrefs {
     }
 
     fun isPaused(context: Context): Boolean =
-        isPausedCache ?: prefs(context).getBoolean(KEY_PAUSED, false).also { isPausedCache = it }
+        isPausedCache ?: prefs(context).getBoolean(KEY_PAUSED, true).also { isPausedCache = it }
+
+    fun setBubbleManuallyOff(context: Context, manualOff: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BUBBLE_MANUAL_OFF, manualOff).apply()
+    }
+
+    fun isBubbleManuallyOff(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BUBBLE_MANUAL_OFF, false)
 
     // ---------- Pickup / Drop selections (A = Accept, R = Reject) ----------
 
@@ -73,20 +81,18 @@ object AreaPrefs {
         dropCache = copySelections(selections)
     }
 
-    fun getRejectPickupSelections(context: Context): Map<String, Set<String>> =
-        rejectPickupCache ?: readSelections(context, KEY_REJECT_PICKUP_JSON).also { rejectPickupCache = it }
+    fun getRejectPickupSelections(context: Context): Map<String, Set<String>> = emptyMap()
 
     fun setRejectPickupSelections(context: Context, selections: Map<String, Set<String>>) {
-        writeSelections(context, KEY_REJECT_PICKUP_JSON, selections)
-        rejectPickupCache = copySelections(selections)
+        rejectPickupCache = emptyMap()
+        prefs(context).edit().remove(KEY_REJECT_PICKUP_JSON).apply()
     }
 
-    fun getRejectDropSelections(context: Context): Map<String, Set<String>> =
-        rejectDropCache ?: readSelections(context, KEY_REJECT_DROP_JSON).also { rejectDropCache = it }
+    fun getRejectDropSelections(context: Context): Map<String, Set<String>> = emptyMap()
 
     fun setRejectDropSelections(context: Context, selections: Map<String, Set<String>>) {
-        writeSelections(context, KEY_REJECT_DROP_JSON, selections)
-        rejectDropCache = copySelections(selections)
+        rejectDropCache = emptyMap()
+        prefs(context).edit().remove(KEY_REJECT_DROP_JSON).apply()
     }
 
     // ---------- User-added custom localities ----------
@@ -263,35 +269,13 @@ object AreaPrefs {
         kw.forEach { wordRegex(normalize(it)) }
     }
 
-    fun matchesRejectText(context: Context, rawScreenText: String): Boolean {
-        val rejectPickup = getRejectPickupSelections(context)
-        val rejectDrop = getRejectDropSelections(context)
-        if (rejectPickup.isEmpty() && rejectDrop.isEmpty()) return false
-        val fullNorm = normalize(rawScreenText)
-        val (pickupText, dropText) = splitOrder(rawScreenText)
-        return matchesRejectSplit(context, rejectPickup, rejectDrop, pickupText, dropText, fullNorm)
-    }
-
-    private fun matchesRejectSplit(
-        context: Context,
-        rejectPickup: Map<String, Set<String>>,
-        rejectDrop: Map<String, Set<String>>,
-        pickupText: String,
-        dropText: String,
-        fullNorm: String
-    ): Boolean {
-        if (rejectPickup.isNotEmpty() && selectionsMatchText(context, rejectPickup, pickupText, fullNorm)) return true
-        if (rejectDrop.isNotEmpty() && selectionsMatchText(context, rejectDrop, dropText, fullNorm)) return true
-        return false
-    }
+    fun matchesRejectText(context: Context, rawScreenText: String): Boolean = false
 
     fun matchesScreenText(context: Context, rawScreenText: String): Boolean {
         val dropSelections = getDropSelections(context)
         // Drop (A) set kiye bina kabhi match nahi hoga — instant exit
         if (dropSelections.isEmpty()) return false
 
-        val rejectPickup = getRejectPickupSelections(context)
-        val rejectDrop = getRejectDropSelections(context)
         val pickupSelections = getPickupSelections(context)
         val pickupKeywords = getPickupKeywords(context)
         val maxPickupKm = getMaxPickupKm(context)
@@ -303,14 +287,7 @@ object AreaPrefs {
         // splitOrder ek hi baar chalao
         val (pickupText, dropText) = splitOrder(rawScreenText)
 
-        // 1. Pehle Reject (R) check: agar Pickup ya Drop par R match ho to order accept NAHI hoga
-        if ((rejectPickup.isNotEmpty() || rejectDrop.isNotEmpty()) &&
-            matchesRejectSplit(context, rejectPickup, rejectDrop, pickupText, dropText, fullNorm)
-        ) {
-            return false
-        }
-
-        // 2. Accept (A) Drop check
+        // 1. Accept (A) Drop check
         if (!selectionsMatchText(context, dropSelections, dropText, fullNorm)) return false
 
         // 3. Accept (A) Pickup check:

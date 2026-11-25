@@ -30,11 +30,9 @@ class AreaPreferenceActivity : AppCompatActivity() {
     private var allCities: Map<String, List<String>> = emptyMap()
     private var verifiedCityNames: Set<String> = emptySet()
 
-    // Working (unsaved) selections: A = Accept, R = Reject
+    // Working (unsaved) selections: Sirf A (Accept)
     private val workingPickupA = mutableMapOf<String, MutableSet<String>>()
     private val workingDropA = mutableMapOf<String, MutableSet<String>>()
-    private val workingPickupR = mutableMapOf<String, MutableSet<String>>()
-    private val workingDropR = mutableMapOf<String, MutableSet<String>>()
 
     private val expandedCities = mutableSetOf<String>()
     private val searchHandler = Handler(Looper.getMainLooper())
@@ -42,6 +40,16 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!PermissionManager.isEverythingReady(this)) {
+            Toast.makeText(
+                this,
+                "Pehle sabhi settings ON karein, tabhi Location set hogi",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(android.content.Intent(this, PermissionSetupActivity::class.java))
+            finish()
+            return
+        }
         binding = ActivityAreaPreferenceBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -50,8 +58,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
         loadWorkingStateFrom(AreaPrefs.getPickupSelections(this), workingPickupA)
         loadWorkingStateFrom(AreaPrefs.getDropSelections(this), workingDropA)
-        loadWorkingStateFrom(AreaPrefs.getRejectPickupSelections(this), workingPickupR)
-        loadWorkingStateFrom(AreaPrefs.getRejectDropSelections(this), workingDropR)
 
         binding.pickupKeywords.setText(AreaPrefs.getPickupKeywords(this).joinToString(", "))
         val savedMaxKm = AreaPrefs.getMaxPickupKm(this)
@@ -87,12 +93,10 @@ class AreaPreferenceActivity : AppCompatActivity() {
         binding.btnResetAll.setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("Sab location hatao?")
-                .setMessage("Pickup (A/R), Drop (A/R), distance aur khaas naam sab hat jayenge.")
+                .setMessage("Pickup (A), Drop (A), distance aur khaas naam sab hat jayenge.")
                 .setPositiveButton("Haan, sab hatao") { _, _ ->
                     workingPickupA.clear()
                     workingDropA.clear()
-                    workingPickupR.clear()
-                    workingDropR.clear()
                     binding.pickupKeywords.setText("")
                     binding.etMaxPickupKm.setText("")
                     AreaPrefs.setPickupSelections(this, emptyMap())
@@ -103,7 +107,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     AreaPrefs.setMaxPickupKm(this, 0f)
                     AreaPrefs.setAllowPickupWhenKmMissing(this, true)
                     renderCities()
-                    Toast.makeText(this, "Sab location (A aur R) hat gaye", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Sab location hat gaye", Toast.LENGTH_SHORT).show()
                 }
                 .setNegativeButton("Nahi", null)
                 .show()
@@ -149,9 +153,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
     private fun activeAcceptMap(): MutableMap<String, MutableSet<String>> =
         if (currentTab == Tab.PICKUP) workingPickupA else workingDropA
 
-    private fun activeRejectMap(): MutableMap<String, MutableSet<String>> =
-        if (currentTab == Tab.PICKUP) workingPickupR else workingDropR
-
     private fun refreshDistanceButtons() {
         val currentKm = binding.etMaxPickupKm.text?.toString()?.trim()?.replace(',', '.')?.toFloatOrNull() ?: 0f
         val offColor = ColorStateList.valueOf(Color.parseColor("#2A2A2A"))
@@ -172,40 +173,20 @@ class AreaPreferenceActivity : AppCompatActivity() {
         }
     }
 
-    private fun ensurePickupAcceptActive() {
-        // Unified mode: location & KM work together seamlessly without a toggle checkbox.
-    }
-
-    private fun styleModeBox(tv: TextView, isAcceptBox: Boolean, isActive: Boolean) {
+    private fun styleAcceptBox(tv: TextView, isActive: Boolean) {
         val dp = resources.displayMetrics.density
-        tv.setTextColor(
-            when {
-                isActive -> Color.WHITE
-                isAcceptBox -> Color.parseColor("#81C784")
-                else -> Color.parseColor("#EF5350")
-            }
-        )
+        tv.setTextColor(if (isActive) Color.WHITE else Color.parseColor("#81C784"))
         tv.background = GradientDrawable().apply {
             cornerRadius = 8 * dp
-            setColor(
-                when {
-                    isActive && isAcceptBox -> Color.parseColor("#43A047")
-                    isActive && !isAcceptBox -> Color.parseColor("#C62828")
-                    else -> Color.parseColor("#2A2A2A")
-                }
-            )
+            setColor(if (isActive) Color.parseColor("#43A047") else Color.parseColor("#2A2A2A"))
             setStroke(
                 (1 * dp).toInt().coerceAtLeast(1),
-                when {
-                    isActive && isAcceptBox -> Color.parseColor("#81C784")
-                    isActive && !isAcceptBox -> Color.parseColor("#EF5350")
-                    else -> Color.parseColor("#424242")
-                }
+                if (isActive) Color.parseColor("#81C784") else Color.parseColor("#424242")
             )
         }
     }
 
-    private fun makeModeBox(label: String, isAcceptBox: Boolean, isActive: Boolean): TextView {
+    private fun makeAcceptBox(label: String, isActive: Boolean): TextView {
         val dp = resources.displayMetrics.density
         val sizePx = (42 * dp).toInt()
         return TextView(this).apply {
@@ -218,19 +199,18 @@ class AreaPreferenceActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(sizePx, sizePx).apply {
                 marginStart = (6 * dp).toInt()
             }
-            styleModeBox(this, isAcceptBox, isActive)
+            styleAcceptBox(this, isActive)
         }
     }
 
     private fun renderCities() {
         binding.cityContainer.removeAllViews()
         val acceptMap = activeAcceptMap()
-        val rejectMap = activeRejectMap()
         val query = binding.locationSearch.text?.toString()?.trim()?.lowercase().orEmpty()
         val rawQuery = binding.locationSearch.text?.toString()?.trim().orEmpty()
 
         binding.cityContainer.addView(TextView(this).apply {
-            text = "Har location ke aage [A] = Accept, [R] = Reject"
+            text = "Jis location ka order uthana hai uske aage [A] (Accept) dabayein"
             setTextColor(Color.parseColor("#B0BEC5"))
             textSize = 12f
             setPadding(0, 4, 0, 10)
@@ -242,7 +222,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 val niceName = rawQuery.split(" ").filter { it.isNotEmpty() }
                     .joinToString(" ") { w -> w.replaceFirstChar { c -> c.uppercase() } }
                 binding.cityContainer.addView(TextView(this).apply {
-                    text = "\"$niceName\" list me nahi mila — kis city me A ya R jodna hai:"
+                    text = "\"$niceName\" list me nahi mila — kis city me Accept (A) jodna hai:"
                     setTextColor(0xFFFFB74D.toInt())
                     textSize = 13f
                     setPadding(0, 12, 0, 8)
@@ -253,32 +233,14 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     btnRow.addView(Button(this).apply {
                         text = "$cityName +A"
                         setOnClickListener {
-                            ensurePickupAcceptActive()
                             AreaPrefs.addCustomLocality(this@AreaPreferenceActivity, cityName, niceName)
                             allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
-                            activeRejectMap()[cityName]?.remove(niceName)
                             activeAcceptMap().getOrPut(cityName) { mutableSetOf() }.add(niceName)
                             expandedCities.add(cityName)
                             binding.locationSearch.setText("")
                             Toast.makeText(
                                 this@AreaPreferenceActivity,
                                 "$niceName ($cityName) [A] me jud gaya",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    })
-                    btnRow.addView(Button(this).apply {
-                        text = "$cityName +R"
-                        setOnClickListener {
-                            AreaPrefs.addCustomLocality(this@AreaPreferenceActivity, cityName, niceName)
-                            allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
-                            activeAcceptMap()[cityName]?.remove(niceName)
-                            activeRejectMap().getOrPut(cityName) { mutableSetOf() }.add(niceName)
-                            expandedCities.add(cityName)
-                            binding.locationSearch.setText("")
-                            Toast.makeText(
-                                this@AreaPreferenceActivity,
-                                "$niceName ($cityName) [R] me jud gaya",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -297,9 +259,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
             val isExpanded = if (query.isNotEmpty()) localities.size <= 80 else city in expandedCities
             val acceptSet = acceptMap[city] ?: mutableSetOf()
-            val rejectSet = rejectMap[city] ?: mutableSetOf()
             val isAllAccept = acceptSet.contains(AreaPrefs.ALL_MARKER)
-            val isAllReject = rejectSet.contains(AreaPrefs.ALL_MARKER)
 
             val section = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -320,12 +280,10 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
 
-            val btnCityA = makeModeBox("A", isAcceptBox = true, isActive = isAllAccept)
-            val btnCityR = makeModeBox("R", isAcceptBox = false, isActive = isAllReject)
+            val btnCityA = makeAcceptBox("A", isActive = isAllAccept)
 
             headerRow.addView(expandArrow)
             headerRow.addView(btnCityA)
-            headerRow.addView(btnCityR)
 
             if (city !in verifiedCityNames) {
                 headerRow.addView(TextView(this).apply {
@@ -341,8 +299,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
                                 AreaPrefs.removeCustomCity(this@AreaPreferenceActivity, city)
                                 workingPickupA.remove(city)
                                 workingDropA.remove(city)
-                                workingPickupR.remove(city)
-                                workingDropR.remove(city)
                                 expandedCities.remove(city)
                                 allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
                                 renderCities()
@@ -364,20 +320,16 @@ class AreaPreferenceActivity : AppCompatActivity() {
 
             fun refreshHeaderBoxes() {
                 val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
-                val nowAllR = rejectMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
-                styleModeBox(btnCityA, isAcceptBox = true, isActive = nowAllA)
-                styleModeBox(btnCityR, isAcceptBox = false, isActive = nowAllR)
+                styleAcceptBox(btnCityA, isActive = nowAllA)
             }
 
             fun buildChildRows() {
                 childContainer.removeAllViews()
                 childrenBuilt = true
                 val curA = acceptMap[city] ?: mutableSetOf()
-                val curR = rejectMap[city] ?: mutableSetOf()
                 val curAllA = curA.contains(AreaPrefs.ALL_MARKER)
-                val curAllR = curR.contains(AreaPrefs.ALL_MARKER)
 
-                // Inline add new sector with +A and +R
+                // Inline add new sector with +A only
                 val addRow = LinearLayout(this@AreaPreferenceActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
@@ -389,52 +341,32 @@ class AreaPreferenceActivity : AppCompatActivity() {
                     setHintTextColor(Color.parseColor("#9E9E9E"))
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
-                val addABtn = makeModeBox("+A", isAcceptBox = true, isActive = true)
-                val addRBtn = makeModeBox("+R", isAcceptBox = false, isActive = true)
+                val addABtn = makeAcceptBox("+A", isActive = true)
                 addABtn.setOnClickListener {
                     val value = input.text.toString().trim()
                     if (value.isEmpty()) {
                         Toast.makeText(this@AreaPreferenceActivity, "Area ka naam likhein", Toast.LENGTH_SHORT).show()
                     } else {
-                        ensurePickupAcceptActive()
                         AreaPrefs.addCustomLocality(this@AreaPreferenceActivity, city, value)
                         allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
-                        rejectMap[city]?.remove(value)
                         acceptMap.getOrPut(city) { mutableSetOf() }.add(value)
-                        expandedCities.add(city)
-                        renderCities()
-                    }
-                }
-                addRBtn.setOnClickListener {
-                    val value = input.text.toString().trim()
-                    if (value.isEmpty()) {
-                        Toast.makeText(this@AreaPreferenceActivity, "Area ka naam likhein", Toast.LENGTH_SHORT).show()
-                    } else {
-                        AreaPrefs.addCustomLocality(this@AreaPreferenceActivity, city, value)
-                        allCities = LocationRepository.loadAllCitiesWithCustom(this@AreaPreferenceActivity)
-                        acceptMap[city]?.remove(value)
-                        rejectMap.getOrPut(city) { mutableSetOf() }.add(value)
                         expandedCities.add(city)
                         renderCities()
                     }
                 }
                 addRow.addView(input)
                 addRow.addView(addABtn)
-                addRow.addView(addRBtn)
                 childContainer.addView(addRow)
 
                 val slice = if (localities.size > displayLimit) localities.subList(0, displayLimit) else localities
                 for (locality in slice) {
-                    val locReject = curAllR || curR.contains(locality)
-                    val locAccept = !locReject && (curAllA || curA.contains(locality))
+                    val locAccept = curAllA || curA.contains(locality)
 
                     val row = LinearLayout(this@AreaPreferenceActivity).apply {
                         orientation = LinearLayout.HORIZONTAL
                         gravity = Gravity.CENTER_VERTICAL
                         setPadding(8, 6, 4, 6)
-                        if (locReject) {
-                            setBackgroundColor(Color.argb(45, 198, 40, 40))
-                        } else if (locAccept) {
+                        if (locAccept) {
                             setBackgroundColor(Color.argb(45, 67, 160, 71))
                         }
                     }
@@ -446,27 +378,16 @@ class AreaPreferenceActivity : AppCompatActivity() {
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     }
 
-                    val boxA = makeModeBox("A", isAcceptBox = true, isActive = locAccept)
-                    val boxR = makeModeBox("R", isAcceptBox = false, isActive = locReject)
+                    val boxA = makeAcceptBox("A", isActive = locAccept)
 
-                    fun updateRowVisuals(acceptNow: Boolean, rejectNow: Boolean) {
-                        styleModeBox(boxA, isAcceptBox = true, isActive = acceptNow)
-                        styleModeBox(boxR, isAcceptBox = false, isActive = rejectNow)
+                    fun updateRowVisuals(acceptNow: Boolean) {
+                        styleAcceptBox(boxA, isActive = acceptNow)
                         row.setBackgroundColor(
-                            when {
-                                rejectNow -> Color.argb(45, 198, 40, 40)
-                                acceptNow -> Color.argb(45, 67, 160, 71)
-                                else -> Color.TRANSPARENT
-                            }
+                            if (acceptNow) Color.argb(45, 67, 160, 71) else Color.TRANSPARENT
                         )
                     }
 
                     boxA.setOnClickListener {
-                        ensurePickupAcceptActive()
-                        rejectMap[city]?.remove(AreaPrefs.ALL_MARKER)
-                        rejectMap[city]?.remove(locality)
-                        if (rejectMap[city]?.isEmpty() == true) rejectMap.remove(city)
-
                         val setA = acceptMap.getOrPut(city) { mutableSetOf() }
                         val wasAllA = setA.contains(AreaPrefs.ALL_MARKER)
                         if (setA.contains(locality)) {
@@ -478,30 +399,11 @@ class AreaPreferenceActivity : AppCompatActivity() {
                         refreshHeaderBoxes()
                         val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
                         val nowA = nowAllA || acceptMap[city]?.contains(locality) == true
-                        updateRowVisuals(acceptNow = nowA, rejectNow = false)
-                    }
-
-                    boxR.setOnClickListener {
-                        val setR = rejectMap.getOrPut(city) { mutableSetOf() }
-                        if (setR.contains(locality)) {
-                            setR.remove(locality)
-                            if (setR.isEmpty()) rejectMap.remove(city)
-                        } else {
-                            setR.add(locality)
-                            acceptMap[city]?.remove(locality)
-                            if (acceptMap[city]?.isEmpty() == true) acceptMap.remove(city)
-                        }
-                        refreshHeaderBoxes()
-                        val nowAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
-                        val nowAllR = rejectMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
-                        val nowR = nowAllR || rejectMap[city]?.contains(locality) == true
-                        val nowA = !nowR && (nowAllA || acceptMap[city]?.contains(locality) == true)
-                        updateRowVisuals(acceptNow = nowA, rejectNow = nowR)
+                        updateRowVisuals(acceptNow = nowA)
                     }
 
                     row.addView(tvLoc)
                     row.addView(boxA)
-                    row.addView(boxR)
                     childContainer.addView(row)
                 }
 
@@ -517,7 +419,6 @@ class AreaPreferenceActivity : AppCompatActivity() {
                 }
             }
 
-            // ONLY build child rows right now if this city is actually expanded!
             if (isExpanded) {
                 buildChildRows()
             }
@@ -536,30 +437,11 @@ class AreaPreferenceActivity : AppCompatActivity() {
             }
 
             btnCityA.setOnClickListener {
-                ensurePickupAcceptActive()
                 val curAllA = acceptMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
                 if (curAllA) {
                     acceptMap.remove(city)
                 } else {
                     acceptMap[city] = mutableSetOf(AreaPrefs.ALL_MARKER)
-                    rejectMap[city]?.remove(AreaPrefs.ALL_MARKER)
-                    if (rejectMap[city]?.isEmpty() == true) rejectMap.remove(city)
-                }
-                refreshHeaderBoxes()
-                if (childContainer.visibility == View.VISIBLE) {
-                    buildChildRows()
-                } else {
-                    childrenBuilt = false
-                }
-            }
-
-            btnCityR.setOnClickListener {
-                val curAllR = rejectMap[city]?.contains(AreaPrefs.ALL_MARKER) == true
-                if (curAllR) {
-                    rejectMap.remove(city)
-                } else {
-                    rejectMap[city] = mutableSetOf(AreaPrefs.ALL_MARKER)
-                    acceptMap.remove(city)
                 }
                 refreshHeaderBoxes()
                 if (childContainer.visibility == View.VISIBLE) {
@@ -584,8 +466,8 @@ class AreaPreferenceActivity : AppCompatActivity() {
         AreaPrefs.setMaxPickupKm(this, maxKm)
         AreaPrefs.setAllowPickupWhenKmMissing(this, true)
         AreaPrefs.setDropSelections(this, workingDropA)
-        AreaPrefs.setRejectPickupSelections(this, workingPickupR)
-        AreaPrefs.setRejectDropSelections(this, workingDropR)
+        AreaPrefs.setRejectPickupSelections(this, emptyMap())
+        AreaPrefs.setRejectDropSelections(this, emptyMap())
 
         val hasPickupLoc = workingPickupA.isNotEmpty() || words.isNotEmpty()
         val hasPickupKm = maxKm > 0f
@@ -595,7 +477,7 @@ class AreaPreferenceActivity : AppCompatActivity() {
             !hasPickupLoc && !hasPickupKm ->
                 "Saved! Pickup: Kahin se bhi aur kitni bhi door se uthega"
             else ->
-                "Saved (A, R & Distance rules)"
+                "Saved (Accept & Distance rules)"
         }
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         finish()

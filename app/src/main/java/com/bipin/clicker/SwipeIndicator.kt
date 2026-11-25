@@ -145,11 +145,11 @@ object SwipeIndicator {
                 val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
                 windowManager = wm
 
-                val dm = service.resources.displayMetrics
-                val saved = SwipeZone.get(service)
-                val sx = saved?.startX ?: dm.widthPixels * 0.23f
-                val ex = saved?.endX ?: dm.widthPixels * 0.89f
-                val y = saved?.y ?: dm.heightPixels * 0.72f
+                val (_, realH) = SwipeZone.getScreenDimensions(service)
+                val saved = SwipeZone.ensureAutoCalibrated(service)
+                val sx = saved.startX
+                val ex = saved.endX
+                val y = saved.y
 
                 if (lineView == null) {
                     val v = IndicatorView(service).apply {
@@ -160,7 +160,7 @@ object SwipeIndicator {
                     }
                     val lp = WindowManager.LayoutParams(
                         WindowManager.LayoutParams.MATCH_PARENT,
-                        dm.heightPixels,
+                        realH,
                         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or

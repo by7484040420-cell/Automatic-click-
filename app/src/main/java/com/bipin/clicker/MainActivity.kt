@@ -7,44 +7,19 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
-import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
-import android.view.Gravity
 import android.view.View
-import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bipin.clicker.databinding.ActivityMainBinding
-import com.google.android.gms.ads.AdRequest
-import com.google.android.gms.ads.AdSize
-import com.google.android.gms.ads.AdView
-import com.google.android.gms.ads.MobileAds
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var adBanner: AdView? = null
-    private var adsInitialized = false
     private var lastResumeSyncAt = 0L
-
-    private val projectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { r ->
-        val data = r.data
-        if (r.resultCode == RESULT_OK && data != null) {
-            ScreenWatcherService.start(this, r.resultCode, data)
-            Toast.makeText(this, "Screen Watcher ON", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Screen capture permission nahi mili", Toast.LENGTH_LONG).show()
-        }
-        binding.root.postDelayed({ refreshStatus() }, 500)
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,79 +51,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnSetArea.setOnClickListener {
+            if (!PermissionManager.isEverythingReady(this)) {
+                val missing = PermissionManager.missingSettingsList(this).joinToString(", ")
+                Toast.makeText(
+                    this,
+                    "Pehle sabhi settings ON karein ($missing), tabhi Location set hogi",
+                    Toast.LENGTH_LONG
+                ).show()
+                startActivity(Intent(this, PermissionSetupActivity::class.java))
+                return@setOnClickListener
+            }
             startActivity(Intent(this, AreaPreferenceActivity::class.java))
         }
 
         binding.btnFloatingBubble.setOnClickListener { toggleFloatingBubble() }
 
-        binding.btnRootSetup.setOnClickListener { runRootSetup(true) }
-        binding.btnScreenWatch.setOnClickListener {
-            if (ScreenWatcherService.running) {
-                ScreenWatcherService.stop(this)
-                binding.root.postDelayed({ refreshStatus() }, 300)
-            } else {
-                val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                projectionLauncher.launch(mpm.createScreenCaptureIntent())
-            }
-        }
-        binding.btnSwipeZone.setOnClickListener { openSwipeZoneEditor() }
+        binding.btnSwipeZone.setOnClickListener { autoFixSwipeZone() }
         binding.btnWhatsappHelp.setOnClickListener {
             LicenseManager.openWhatsAppSupport(this, isHelp = true)
         }
 
-        // First frame turant render hone ke baad Ads load karo (app open lag na ho)
-        binding.root.postDelayed({ initAdsIfNeeded() }, 600L)
-
-        // Advanced cheezein chhupi rahengi, dabane par hi dikhengi
-        binding.tvAdvanced.setOnClickListener {
-            val show = binding.advancedBox.visibility != View.VISIBLE
-            binding.advancedBox.visibility = if (show) View.VISIBLE else View.GONE
-            binding.tvAdvanced.text = if (show) "Advanced \u25B4" else "Advanced \u25BE"
-        }
+        // Har phone ki screen ke hisab se Swipe Zone khud-ba-khud set kar lo
+        SwipeZone.ensureAutoCalibrated(this)
 
         // Purane Android (11 se neeche) par sirf OCR backup band hota hai; asli (tez,
-        // screenshot-wala-nahi) tareeka har Android version par chalta hai. Isliye ye ab
-        // sirf jaankari hai, "kaam nahi karega" nahi.
+        // screenshot-wala-nahi) tareeka har Android version par chalta hai.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             binding.tvWarn.visibility = View.VISIBLE
             binding.tvWarn.text = "Is phone me Android ${Build.VERSION.RELEASE} hai. " +
                 "Asli (tez) order-detect tareeka yahan bhi chalega; sirf OCR wala backup " +
                 "(Android 11+ ka) is phone par kaam nahi karega."
         }
-    }
-
-    private fun initAdsIfNeeded() {
-        if (adsInitialized || isFinishing || isDestroyed) return
-        adsInitialized = true
-        try {
-            MobileAds.initialize(applicationContext) {
-                if (isFinishing || isDestroyed) return@initialize
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    val banner = AdView(this)
-                    banner.setAdSize(AdSize.BANNER)
-                    banner.adUnitId = AdIds.BANNER
-                    binding.adBannerBox.addView(
-                        banner,
-                        FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.WRAP_CONTENT,
-                            FrameLayout.LayoutParams.WRAP_CONTENT,
-                            Gravity.CENTER_HORIZONTAL
-                        )
-                    )
-                    banner.loadAd(AdRequest.Builder().build())
-                    adBanner = banner
-                    NativeVideoAd.load(this, binding.adVideoBox)
-                }
-            }
-        } catch (_: Exception) {
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        NativeVideoAd.destroy()
-        adBanner?.destroy()
     }
 
     override fun onResume() {
@@ -165,42 +98,46 @@ class MainActivity : AppCompatActivity() {
             LicenseManager.refreshAsync(this)
             UpdateManager.checkAndPrompt(this)
         }
+        SwipeZone.ensureAutoCalibrated(this)
+        ensureAutoFloatingBubble()
         refreshStatus()
     }
 
-    private fun runRootSetup(manual: Boolean) {
-        RootShell.connect { ok ->
-            if (ok) {
-                Thread {
-                    RootShell.grantAll(this)
-                    runOnUiThread {
-                        refreshStatus()
-                        if (manual) Toast.makeText(this, "Root se permissions de di gayi", Toast.LENGTH_LONG).show()
-                    }
-                }.start()
-            } else {
-                runOnUiThread {
-                    refreshStatus()
-                    if (manual) Toast.makeText(this, "Root nahi mila: ${RootShell.state}", Toast.LENGTH_LONG).show()
-                }
-            }
+    private fun ensureAutoFloatingBubble() {
+        if (!PermissionManager.isEverythingReady(this)) return
+        if (AreaPrefs.isBubbleManuallyOff(this)) return
+        if (PermissionManager.isFloatingBubbleRunning(this)) return
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, FloatingBubbleService::class.java))
+            binding.root.postDelayed({
+                if (!isFinishing && !isDestroyed) refreshStatus()
+            }, 350L)
+        } catch (_: Exception) {
         }
     }
 
     private fun toggleStartStop() {
-        if (!PermissionManager.isAccessibilityServiceEnabled(this)) {
-            Toast.makeText(this, "Pehle Accessibility Service ON karein (Permissions button)", Toast.LENGTH_LONG).show()
+        if (!PermissionManager.isEverythingReady(this)) {
+            AreaPrefs.setPaused(this, true)
+            val missing = PermissionManager.missingSettingsList(this).joinToString(", ")
+            Toast.makeText(
+                this,
+                "Pehle sabhi settings ON karein ($missing), tabhi app ON hoga",
+                Toast.LENGTH_LONG
+            ).show()
             startActivity(Intent(this, PermissionSetupActivity::class.java))
+            refreshStatus()
             return
         }
         val nowPaused = !AreaPrefs.isPaused(this)
         AreaPrefs.setPaused(this, nowPaused)
         if (nowPaused) {
-            // BAND karte hi baaki sab bhi band: screen watcher aur bubble
-            if (ScreenWatcherService.running) ScreenWatcherService.stop(this)
             if (PermissionManager.isFloatingBubbleRunning(this)) {
                 stopService(Intent(this, FloatingBubbleService::class.java))
             }
+        } else {
+            AreaPrefs.setBubbleManuallyOff(this, false)
+            ensureAutoFloatingBubble()
         }
         refreshStatus()
         Toast.makeText(
@@ -210,27 +147,47 @@ class MainActivity : AppCompatActivity() {
         ).show()
     }
 
-    private fun openSwipeZoneEditor() {
-        if (!SwipeZone.openEditor(this)) {
-            Toast.makeText(this, "Pehle Accessibility Service ON karein", Toast.LENGTH_LONG).show()
+    private fun autoFixSwipeZone() {
+        if (!PermissionManager.isEverythingReady(this)) {
+            Toast.makeText(
+                this,
+                "Pehle sabhi settings ON karein",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(this, PermissionSetupActivity::class.java))
             return
         }
-        Toast.makeText(this, "Hari line ko slider par rakho, phir SAVE dabao", Toast.LENGTH_LONG).show()
-        moveTaskToBack(true)
+        SwipeZone.autoCalibrateAndSave(this)
+        val (w, h) = SwipeZone.getScreenDimensions(this)
+        try {
+            SwipeIndicator.animateSwipe(220L)
+        } catch (_: Exception) {
+        }
+        refreshStatus()
+        Toast.makeText(
+            this,
+            "Swipe Zone is phone (${w}x${h}) par khud fix ho gaya! Order aane par apne aap uthega.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun toggleFloatingBubble() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Pehle 'Display over other apps' permission allow karein", Toast.LENGTH_LONG).show()
-            startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            )
+        if (!PermissionManager.isEverythingReady(this)) {
+            val missing = PermissionManager.missingSettingsList(this).joinToString(", ")
+            Toast.makeText(
+                this,
+                "Pehle sabhi settings ON karein ($missing)",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(this, PermissionSetupActivity::class.java))
             return
         }
         try {
             if (PermissionManager.isFloatingBubbleRunning(this)) {
+                AreaPrefs.setBubbleManuallyOff(this, true)
                 stopService(Intent(this, FloatingBubbleService::class.java))
             } else {
+                AreaPrefs.setBubbleManuallyOff(this, false)
                 ContextCompat.startForegroundService(this, Intent(this, FloatingBubbleService::class.java))
             }
         } catch (e: Exception) {
@@ -255,7 +212,20 @@ class MainActivity : AppCompatActivity() {
     private fun refreshStatus() {
         val accessibilityOn = PermissionManager.isAccessibilityServiceEnabled(this)
         val overlayOn = PermissionManager.isOverlayPermissionGranted(this)
+        val notifOn = PermissionManager.isNotificationPermissionGranted(this)
+        val batteryOn = PermissionManager.isBatteryOptimizationIgnored(this)
+        val allReady = accessibilityOn && overlayOn && notifOn && batteryOn
         val bubbleOn = PermissionManager.isFloatingBubbleRunning(this)
+
+        // Jab tak sabhi settings ON na hon, app aur bubble OFF hi rahenge
+        if (!allReady) {
+            if (!AreaPrefs.isPaused(this)) {
+                AreaPrefs.setPaused(this, true)
+            }
+            if (bubbleOn) {
+                runCatching { stopService(Intent(this, FloatingBubbleService::class.java)) }
+            }
+        }
         val paused = AreaPrefs.isPaused(this)
 
         binding.statusAccessibility.text =
@@ -263,12 +233,20 @@ class MainActivity : AppCompatActivity() {
         binding.statusOverlay.text =
             if (overlayOn) "\u2705 Overlay Permission: ON" else "\u274C Overlay Permission: OFF"
 
+        val extraIssues = mutableListOf<String>()
+        if (!notifOn) extraIssues.add("\u274C Notification Permission: OFF")
+        if (!batteryOn) extraIssues.add("\u274C Battery Unrestricted: OFF")
+        if (extraIssues.isEmpty()) {
+            binding.statusExtraPerms.visibility = View.GONE
+        } else {
+            binding.statusExtraPerms.visibility = View.VISIBLE
+            binding.statusExtraPerms.text = extraIssues.joinToString("\n")
+        }
+
         val pickup = AreaPrefs.getPickupSelections(this)
         val pickupKeywords = AreaPrefs.getPickupKeywords(this)
         val maxPickupKm = AreaPrefs.getMaxPickupKm(this)
         val drop = AreaPrefs.getDropSelections(this)
-        val rejectPickup = AreaPrefs.getRejectPickupSelections(this)
-        val rejectDrop = AreaPrefs.getRejectDropSelections(this)
         val kmLabel = if (maxPickupKm > 0f) {
             if (maxPickupKm % 1f == 0f) "${maxPickupKm.toInt()} km" else "$maxPickupKm km"
         } else ""
@@ -285,33 +263,38 @@ class MainActivity : AppCompatActivity() {
                     else -> "Pickup (A): ${parts.joinToString(" · ")}"
                 }
             )
-            if (rejectPickup.isNotEmpty()) append(" · Reject (R): ${rejectPickup.size}")
             append("\n")
             append(if (drop.isEmpty()) "Drop (A): ABHI SET NAHI HAI (kuch bhi accept nahi hoga)" else "Drop (A): ${drop.size} city set")
-            if (rejectDrop.isNotEmpty()) append(" · Reject (R): ${rejectDrop.size}")
         }
 
-        val running = accessibilityOn && !paused
+        val running = allReady && !paused
         binding.btnStartStop.text = when {
-            !accessibilityOn -> "START"
+            !allReady -> "\u25CB OFF"
             paused -> "\u25CB OFF"
             else -> "\u25CF ON"
         }
         binding.btnStartStop.backgroundTintList =
             ColorStateList.valueOf(Color.parseColor(if (running) "#43A047" else "#C62828"))
 
+        // Location button lock/unlock state based on all settings
+        binding.btnSetArea.text = if (allReady) "LOCATION\n(ACCEPT)" else "\uD83D\uDD12 LOCATION\n(ACCEPT)"
+        binding.btnSetArea.backgroundTintList =
+            ColorStateList.valueOf(Color.parseColor(if (allReady) "#5E35B1" else "#424242"))
+        binding.btnSetArea.alpha = if (allReady) 1.0f else 0.75f
+
+        binding.btnSwipeZone.backgroundTintList =
+            ColorStateList.valueOf(Color.parseColor(if (allReady) "#5E35B1" else "#424242"))
+        binding.btnSwipeZone.alpha = if (allReady) 1.0f else 0.75f
+
         // Sirf dikkat ho tab hi permission wali lines/button dikhao
         binding.statusAccessibility.visibility = if (accessibilityOn) View.GONE else View.VISIBLE
         binding.statusOverlay.visibility = if (overlayOn) View.GONE else View.VISIBLE
-        binding.btnPermissions.visibility = if (accessibilityOn && overlayOn) View.GONE else View.VISIBLE
-
-        binding.statusRoot.text = (if (RootShell.ready) "\u2705 " else "\u274C ") + "Root: ${RootShell.state}\n" +
-            (if (ScreenWatcherService.running) "\u2705 Screen Watcher: ON" else "\u274C Screen Watcher: OFF")
-        binding.btnScreenWatch.text =
-            if (ScreenWatcherService.running) "Screen Watcher BAND Karein" else "Screen Watcher ON Karein"
+        binding.btnPermissions.visibility = if (allReady) View.GONE else View.VISIBLE
 
         binding.btnFloatingBubble.text =
-            if (bubbleOn) "Floating Bubble Band Karein" else "Floating Bubble ON Karein"
+            if (bubbleOn) "\u2705 Floating Bubble: ON (Auto)" else "Floating Bubble: OFF (ON Karein)"
+        binding.btnFloatingBubble.backgroundTintList =
+            ColorStateList.valueOf(Color.parseColor(if (bubbleOn) "#2E7D32" else "#5E35B1"))
         binding.btnSwipeZone.text =
             if (SwipeZone.isSet(this)) "SWIPE ZONE \u2705" else "SWIPE ZONE"
     }

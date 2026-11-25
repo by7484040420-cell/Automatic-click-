@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { OEM_AUTOSTART_GUIDES } from '../lib/permissionManager';
+import { OEM_AUTOSTART_GUIDES, getMissingSettings, isEverythingReady } from '../lib/permissionManager';
 import type { PermissionState } from '../types';
 
 interface PermissionSetupViewProps {
@@ -16,6 +16,8 @@ export const PermissionSetupView: React.FC<PermissionSetupViewProps> = ({
   onDone,
 }) => {
   const [wizardStep, setWizardStep] = useState<number | null>(null);
+  const allReady = isEverythingReady(permissions);
+  const missing = getMissingSettings(permissions);
 
   const togglePerm = (key: keyof Pick<PermissionState, 'accessibility' | 'overlay' | 'notification' | 'battery' | 'autostart'>) => {
     const next = { ...permissions, [key]: !permissions[key] };
@@ -93,6 +95,18 @@ export const PermissionSetupView: React.FC<PermissionSetupViewProps> = ({
         >
           Auto Setup Chalayein
         </button>
+      </div>
+
+      <div
+        className={`mb-5 rounded-xl border p-4 text-sm ${
+          allReady
+            ? 'border-[#43A047]/45 bg-[#1B3320] text-[#81C784]'
+            : 'border-[#FFB74D]/40 bg-[#1E1E1E] text-[#FFB74D]'
+        }`}
+      >
+        {allReady
+          ? '✅ Sabhi settings ON hain! Ab Location set kar sakte hain aur App ON kar sakte hain.'
+          : `Jab tak sabhi settings ON nahi hongi (${missing.join(', ')}), tab tak Location set nahi hogi aur App OFF rahega.`}
       </div>
 
       {wizardStep !== null && (

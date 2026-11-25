@@ -14,8 +14,6 @@ import {
   getMaxPickupKm,
   getPickupKeywords,
   getPickupSelections,
-  getRejectDropSelections,
-  getRejectPickupSelections,
   removeCustomCity,
   setAllowPickupWhenKmMissing,
   setDropSelections,
@@ -26,7 +24,7 @@ import {
   setRejectPickupSelections,
 } from '../lib/areaPrefs';
 import { loadAllCitiesWithCustom, loadVerifiedCities } from '../lib/locationRepository';
-import type { AreaTab, CityLocalitiesMap, LocationMode, SelectionMap } from '../types';
+import type { AreaTab, CityLocalitiesMap, SelectionMap } from '../types';
 
 interface AreaPreferenceViewProps {
   onSaved: (message: string) => void;
@@ -66,20 +64,12 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
 
   const [currentTab, setCurrentTab] = useState<AreaTab>('PICKUP');
 
-  // Accept (A) maps
+  // Accept (A) maps only — Reject (R) removed so users never block orders by mistake
   const [workingPickupA, setWorkingPickupA] = useState<Record<string, Set<string>>>(() =>
     cloneSelectionMap(getPickupSelections())
   );
   const [workingDropA, setWorkingDropA] = useState<Record<string, Set<string>>>(() =>
     cloneSelectionMap(getDropSelections())
-  );
-
-  // Reject (R) maps
-  const [workingPickupR, setWorkingPickupR] = useState<Record<string, Set<string>>>(() =>
-    cloneSelectionMap(getRejectPickupSelections())
-  );
-  const [workingDropR, setWorkingDropR] = useState<Record<string, Set<string>>>(() =>
-    cloneSelectionMap(getRejectDropSelections())
   );
 
   const [keywordsText, setKeywordsText] = useState<string>(() =>
@@ -99,8 +89,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
 
   const activeAcceptMap = currentTab === 'PICKUP' ? workingPickupA : workingDropA;
   const setActiveAcceptMap = currentTab === 'PICKUP' ? setWorkingPickupA : setWorkingDropA;
-  const activeRejectMap = currentTab === 'PICKUP' ? workingPickupR : workingDropR;
-  const setActiveRejectMap = currentTab === 'PICKUP' ? setWorkingPickupR : setWorkingDropR;
 
   const query = searchQuery.trim().toLowerCase();
   const rawQuery = searchQuery.trim();
@@ -124,103 +112,30 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     setExpandedCities((prev) => ({ ...prev, [city]: !prev[city] }));
   };
 
-  /**
-   * Toggle All <City> for A (Accept) or R (Reject).
-   * Selecting A clears All R (and vice versa). Clicking an active mode clears it.
-   */
-  const handleToggleAllCityMode = (city: string, mode: LocationMode) => {
-    const targetMap = mode === 'A' ? activeAcceptMap : activeRejectMap;
-    const isCurrentlyAll = targetMap[city]?.has(ALL_MARKER) ?? false;
-
-    if (mode === 'A') {
-      setActiveAcceptMap((prev) => {
-        const next = { ...prev };
-        if (isCurrentlyAll) delete next[city];
-        else next[city] = new Set([ALL_MARKER]);
-        return next;
-      });
-      if (!isCurrentlyAll) {
-        setActiveRejectMap((prev) => {
-          if (!(city in prev)) return prev;
-          const next = { ...prev };
-          if (next[city]?.has(ALL_MARKER)) {
-            delete next[city];
-          }
-          return next;
-        });
-      }
-    } else {
-      setActiveRejectMap((prev) => {
-        const next = { ...prev };
-        if (isCurrentlyAll) delete next[city];
-        else next[city] = new Set([ALL_MARKER]);
-        return next;
-      });
-      if (!isCurrentlyAll) {
-        setActiveAcceptMap((prev) => {
-          if (!prev[city]?.has(ALL_MARKER)) return prev;
-          const next = { ...prev };
-          delete next[city];
-          return next;
-        });
-      }
-    }
+  const handleToggleAllCityAccept = (city: string) => {
+    const isCurrentlyAll = activeAcceptMap[city]?.has(ALL_MARKER) ?? false;
+    setActiveAcceptMap((prev) => {
+      const next = { ...prev };
+      if (isCurrentlyAll) delete next[city];
+      else next[city] = new Set([ALL_MARKER]);
+      return next;
+    });
   };
 
-  /**
-   * Toggle a specific locality/sector for A (Accept) or R (Reject).
-   * Clicking A clears R on that locality; clicking R clears A on that locality.
-   */
-  const handleToggleLocalityMode = (city: string, locality: string, mode: LocationMode) => {
-    const targetMap = mode === 'A' ? activeAcceptMap : activeRejectMap;
-    const hasOwn = targetMap[city]?.has(locality) ?? false;
-
-    if (mode === 'A') {
-      setActiveAcceptMap((prev) => {
-        const next = { ...prev };
-        const set = new Set(next[city] ?? []);
-        if (hasOwn) set.delete(locality);
-        else set.add(locality);
-        if (set.size === 0) delete next[city];
-        else next[city] = set;
-        return next;
-      });
-      if (!hasOwn) {
-        setActiveRejectMap((prev) => {
-          if (!prev[city]?.has(locality)) return prev;
-          const next = { ...prev };
-          const set = new Set(next[city]);
-          set.delete(locality);
-          if (set.size === 0) delete next[city];
-          else next[city] = set;
-          return next;
-        });
-      }
-    } else {
-      setActiveRejectMap((prev) => {
-        const next = { ...prev };
-        const set = new Set(next[city] ?? []);
-        if (hasOwn) set.delete(locality);
-        else set.add(locality);
-        if (set.size === 0) delete next[city];
-        else next[city] = set;
-        return next;
-      });
-      if (!hasOwn) {
-        setActiveAcceptMap((prev) => {
-          if (!prev[city]?.has(locality)) return prev;
-          const next = { ...prev };
-          const set = new Set(next[city]);
-          set.delete(locality);
-          if (set.size === 0) delete next[city];
-          else next[city] = set;
-          return next;
-        });
-      }
-    }
+  const handleToggleLocalityAccept = (city: string, locality: string) => {
+    const hasOwn = activeAcceptMap[city]?.has(locality) ?? false;
+    setActiveAcceptMap((prev) => {
+      const next = { ...prev };
+      const set = new Set(next[city] ?? []);
+      if (hasOwn) set.delete(locality);
+      else set.add(locality);
+      if (set.size === 0) delete next[city];
+      else next[city] = set;
+      return next;
+    });
   };
 
-  const handleAddInlineLocality = (city: string, mode: LocationMode) => {
+  const handleAddInlineLocality = (city: string) => {
     const value = (inlineInputs[city] ?? '').trim();
     if (!value) {
       onNotify('Area ka naam likhein');
@@ -228,8 +143,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     }
     addCustomLocality(city, value);
     setAllCities(loadAllCitiesWithCustom());
-    const setter = mode === 'A' ? setActiveAcceptMap : setActiveRejectMap;
-    setter((prev) => {
+    setActiveAcceptMap((prev) => {
       const next = { ...prev };
       const set = new Set(next[city] ?? []);
       set.add(value);
@@ -237,15 +151,14 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
       return next;
     });
     setInlineInputs((prev) => ({ ...prev, [city]: '' }));
-    onNotify(`"${value}" (${city}) [${mode}] add aur select ho gaya`);
+    onNotify(`"${value}" (${city}) [A] add aur select ho gaya`);
   };
 
-  const handleQuickAddSearchToCity = (cityName: string, mode: LocationMode) => {
+  const handleQuickAddSearchToCity = (cityName: string) => {
     if (!niceSearchName) return;
     addCustomLocality(cityName, niceSearchName);
     setAllCities(loadAllCitiesWithCustom());
-    const setter = mode === 'A' ? setActiveAcceptMap : setActiveRejectMap;
-    setter((prev) => {
+    setActiveAcceptMap((prev) => {
       const next = { ...prev };
       const set = new Set(next[cityName] ?? []);
       set.add(niceSearchName);
@@ -253,14 +166,12 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
       return next;
     });
     setSearchQuery('');
-    onNotify(`${niceSearchName} (${cityName}) [${mode}] jud gaya. SAVE dabao.`);
+    onNotify(`${niceSearchName} (${cityName}) [A] jud gaya. SAVE dabao.`);
   };
 
   const handleConfirmResetAll = () => {
     setWorkingPickupA({});
     setWorkingDropA({});
-    setWorkingPickupR({});
-    setWorkingDropR({});
     setKeywordsText('');
     setMaxPickupKmText('');
     setPickupSelections({});
@@ -271,13 +182,13 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
     setMaxPickupKm(0);
     setAllowPickupWhenKmMissing(true);
     setShowResetConfirm(false);
-    onNotify('Sab location (A aur R) aur distance hat gaye');
+    onNotify('Sab location aur distance hat gaye');
   };
 
   const handleConfirmDeleteFolder = () => {
     if (!deleteFolderCity) return;
     removeCustomCity(deleteFolderCity);
-    for (const setter of [setWorkingPickupA, setWorkingDropA, setWorkingPickupR, setWorkingDropR]) {
+    for (const setter of [setWorkingPickupA, setWorkingDropA]) {
       setter((prev) => {
         if (!(deleteFolderCity in prev)) return prev;
         const next = { ...prev };
@@ -312,22 +223,20 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
 
     const dropAOut = serializeSelectionMap(workingDropA);
     setDropSelections(dropAOut);
-    setRejectPickupSelections(serializeSelectionMap(workingPickupR));
-    setRejectDropSelections(serializeSelectionMap(workingDropR));
+    setRejectPickupSelections({});
+    setRejectDropSelections({});
 
     if (Object.keys(dropAOut).length === 0) {
       onSaved('Dhyan dein: Drop (A) set kiye bina koi bhi order auto-accept nahi hoga');
     } else if (!hasPickupLoc && !hasPickupKm) {
       onSaved('Saved! Pickup: Kahin se bhi aur kitni bhi door se uthega');
     } else {
-      onSaved('Saved (A, R & Distance rules updated)');
+      onSaved('Saved (Accept & Distance rules updated)');
     }
   };
 
   const pickupACount = countMapEntries(workingPickupA);
-  const pickupRCount = countMapEntries(workingPickupR);
   const dropACount = countMapEntries(workingDropA);
-  const dropRCount = countMapEntries(workingDropR);
   const parsedPreviewKm = Number(maxPickupKmText.trim().replace(',', '.'));
   const activeMaxKm = Number.isFinite(parsedPreviewKm) && parsedPreviewKm > 0 ? parsedPreviewKm : 0;
   const hasPickupLocInput = pickupACount > 0 || keywordsText.trim().length > 0;
@@ -339,18 +248,16 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
         <div>
           <h1 className="font-display text-2xl font-bold text-white">Pickup / Drop Set Karein</h1>
           <p className="mt-1 text-sm text-[#9E9E9E]">
-            Har location ke aage{' '}
-            <span className="font-bold text-[#5AD278]">A</span> (Accept) aur{' '}
-            <span className="font-bold text-[#EF5350]">R</span> (Reject) boxes hain
+            Jis location ka order uthana hai uske aage{' '}
+            <span className="font-bold text-[#5AD278]">A (Accept)</span> dabayein
           </p>
           <p className="font-mono-tabular mt-1 text-xs text-[#B0BEC5]">
             Pickup:{' '}
             {!hasPickupLocInput && activeMaxKm <= 0
               ? 'Kahin se bhi (Any KM)'
-              : `${hasPickupLocInput ? `${pickupACount} A` : 'Any Location'}${activeMaxKm > 0 ? ` · <= ${activeMaxKm} km` : ''}`}{' '}
-            / {pickupRCount} R
+              : `${hasPickupLocInput ? `${pickupACount} A` : 'Any Location'}${activeMaxKm > 0 ? ` · <= ${activeMaxKm} km` : ''}`}
             <span aria-hidden="true"> · </span>
-            Drop: {dropACount} A / {dropRCount} R
+            Drop: {dropACount} A
           </p>
         </div>
         {onCancel && (
@@ -467,11 +374,11 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
         </div>
       )}
 
-      {/* Quick-add unmatched query to any city with A or R */}
+      {/* Quick-add unmatched query to any city with A */}
       {rawQuery && !exactMatchExists && (
         <div className="mb-4 rounded-xl border border-[#FFB74D]/30 bg-[#1E1E1E] p-3.5">
           <p className="mb-2.5 text-sm text-[#FFB74D]">
-            &ldquo;{niceSearchName}&rdquo; list me pura nahi mila? Kis city me A (Accept) ya R (Reject) ke saath jodna hai:
+            &ldquo;{niceSearchName}&rdquo; list me pura nahi mila? Kis city me Accept (A) ke saath jodna hai:
           </p>
           <div className="flex flex-wrap gap-2">
             {Object.keys(allCities).map((cityName) => (
@@ -482,17 +389,10 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                 <span className="px-2 text-xs font-medium text-white">{cityName}</span>
                 <button
                   type="button"
-                  onClick={() => handleQuickAddSearchToCity(cityName, 'A')}
+                  onClick={() => handleQuickAddSearchToCity(cityName)}
                   className="min-h-[30px] rounded bg-[#43A047] px-2.5 text-xs font-bold text-white hover:bg-[#388E3C]"
                 >
                   +A
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickAddSearchToCity(cityName, 'R')}
-                  className="min-h-[30px] rounded bg-[#C62828] px-2.5 text-xs font-bold text-white hover:bg-[#B71C1C]"
-                >
-                  +R
                 </button>
               </div>
             ))}
@@ -515,14 +415,11 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
           }
 
           const acceptSet = activeAcceptMap[city] ?? new Set<string>();
-          const rejectSet = activeRejectMap[city] ?? new Set<string>();
           const isAllA = acceptSet.has(ALL_MARKER);
-          const isAllR = rejectSet.has(ALL_MARKER);
           const isExpanded = Boolean(expandedCities[city]) || Boolean(query);
           const isCustomFolder = !verifiedCityNames.has(city);
 
           const countA = isAllA ? allLocalities.length : acceptSet.size;
-          const countR = isAllR ? allLocalities.length : rejectSet.size;
 
           return (
             <div
@@ -544,16 +441,15 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                   <span className="font-mono-tabular text-xs font-normal text-[#9E9E9E]">
                     ({localities.length})
                     {countA > 0 ? ` · ${countA} A` : ''}
-                    {countR > 0 ? ` · ${countR} R` : ''}
                   </span>
                 </button>
 
-                {/* City-level All A / R boxes */}
+                {/* City-level All A box */}
                 <div className="flex items-center gap-1.5">
                   <span className="mr-1 hidden text-[11px] text-[#9E9E9E] sm:inline">All:</span>
                   <button
                     type="button"
-                    onClick={() => handleToggleAllCityMode(city, 'A')}
+                    onClick={() => handleToggleAllCityAccept(city)}
                     title={`All ${city} — Accept (A)`}
                     className={`flex h-9 min-w-[40px] items-center justify-center rounded-lg border px-2.5 text-xs font-bold transition-colors ${
                       isAllA
@@ -562,18 +458,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                     }`}
                   >
                     A
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleAllCityMode(city, 'R')}
-                    title={`All ${city} — Reject (R)`}
-                    className={`flex h-9 min-w-[40px] items-center justify-center rounded-lg border px-2.5 text-xs font-bold transition-colors ${
-                      isAllR
-                        ? 'border-[#FF8A80] bg-[#C62828] text-white'
-                        : 'border-white/15 bg-[#2A2A2A] text-[#B0BEC5] hover:border-[#C62828] hover:text-white'
-                    }`}
-                  >
-                    R
                   </button>
 
                   {isCustomFolder && (
@@ -591,7 +475,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
 
               {isExpanded && (
                 <div className="border-t border-white/10 bg-[#171717] px-3 py-3 sm:px-4">
-                  {/* Inline Add Custom Area with +A / +R */}
+                  {/* Inline Add Custom Area with +A */}
                   <div className="mb-3 flex gap-2">
                     <input
                       type="text"
@@ -602,7 +486,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          handleAddInlineLocality(city, 'A');
+                          handleAddInlineLocality(city);
                         }
                       }}
                       placeholder="Naya area/sector likhein"
@@ -610,36 +494,23 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                     />
                     <button
                       type="button"
-                      onClick={() => handleAddInlineLocality(city, 'A')}
+                      onClick={() => handleAddInlineLocality(city)}
                       className="flex min-h-[40px] items-center gap-1 rounded-lg bg-[#43A047] px-3 text-xs font-bold text-white hover:bg-[#388E3C]"
                     >
                       <Plus className="h-3.5 w-3.5" />
                       <span>A</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddInlineLocality(city, 'R')}
-                      className="flex min-h-[40px] items-center gap-1 rounded-lg bg-[#C62828] px-3 text-xs font-bold text-white hover:bg-[#B71C1C]"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>R</span>
-                    </button>
                   </div>
 
-                  {/* Localities grid — every single locality has A and R boxes */}
+                  {/* Localities grid — Accept (A) box only */}
                   <div className="grid max-h-[380px] grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
                     {localities.map((locality) => {
                       const ownA = acceptSet.has(locality);
-                      const ownR = rejectSet.has(locality);
                       const activeA = isAllA || ownA;
-                      const activeR = isAllR || ownR;
 
-                      // R takes priority visually if user excluded a specific sector while All A is active
-                      const rowSurface = activeR
-                        ? 'border-[#EF5350]/60 bg-[#4A1C1C] text-white'
-                        : activeA
-                          ? 'border-[#5AD278]/60 bg-[#235F37] text-white'
-                          : 'border-transparent bg-[#222222] text-[#E0E0E0]';
+                      const rowSurface = activeA
+                        ? 'border-[#5AD278]/60 bg-[#235F37] text-white'
+                        : 'border-transparent bg-[#222222] text-[#E0E0E0]';
 
                       return (
                         <div
@@ -652,30 +523,16 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
                             <button
                               type="button"
                               disabled={isAllA && !ownA}
-                              onClick={() => handleToggleLocalityMode(city, locality, 'A')}
+                              onClick={() => handleToggleLocalityAccept(city, locality)}
                               aria-label={`${locality} Accept (A)`}
-                              aria-pressed={activeA && !activeR}
+                              aria-pressed={activeA}
                               className={`flex h-10 w-10 touch-manipulation select-none items-center justify-center rounded-md border text-xs font-bold transition-colors ${
-                                activeA && !ownR
+                                activeA
                                   ? 'border-[#81C784] bg-[#43A047] text-white'
                                   : 'border-white/15 bg-[#161616] text-[#9E9E9E] hover:border-[#43A047] hover:text-white'
                               } ${isAllA && !ownA ? 'opacity-65' : ''}`}
                             >
                               A
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isAllR && !ownR}
-                              onClick={() => handleToggleLocalityMode(city, locality, 'R')}
-                              aria-label={`${locality} Reject (R)`}
-                              aria-pressed={activeR}
-                              className={`flex h-10 w-10 touch-manipulation select-none items-center justify-center rounded-md border text-xs font-bold transition-colors ${
-                                activeR
-                                  ? 'border-[#FF8A80] bg-[#C62828] text-white'
-                                  : 'border-white/15 bg-[#161616] text-[#9E9E9E] hover:border-[#C62828] hover:text-white'
-                              } ${isAllR && !ownR ? 'opacity-65' : ''}`}
-                            >
-                              R
                             </button>
                           </div>
                         </div>
@@ -715,7 +572,7 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
           <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#1E1E1E] p-6">
             <h2 className="font-display text-lg font-bold text-white">Sab location hatao?</h2>
             <p className="mt-2 text-sm text-[#B0BEC5]">
-              Pickup, Drop (A aur R dono) aur khaas naam sab hat jayenge. Naya Drop (A) set karne tak koi order auto-accept nahi hoga.
+              Pickup (A), Drop (A) aur khaas naam sab hat jayenge. Naya Drop (A) set karne tak koi order auto-accept nahi hoga.
             </p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -766,7 +623,6 @@ export const AreaPreferenceView: React.FC<AreaPreferenceViewProps> = ({
           </div>
         </div>
       )}
-
     </div>
   );
 };

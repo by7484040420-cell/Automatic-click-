@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.bipin.clicker.databinding.ActivityPermissionSetupBinding
@@ -17,6 +18,13 @@ class PermissionSetupActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityPermissionSetupBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        binding.btnAutoSetup.setOnClickListener {
+            SetupWizard.start(this, forceAll = true)
+            if (!SetupWizard.runNext(this)) {
+                refreshStatuses()
+            }
+        }
 
         binding.btnOpenAccessibility.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -40,32 +48,72 @@ class PermissionSetupActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnDone.setOnClickListener { finish() }
+        binding.btnOpenBattery.setOnClickListener {
+            DeviceAutoStartHelper.openBatteryOptimizationSettings(this)
+        }
+
+        binding.btnOpenAutostart.setOnClickListener {
+            DeviceAutoStartHelper.openBestAvailableAutoStartScreen(this)
+        }
+
+        binding.btnDone.setOnClickListener {
+            if (!PermissionManager.isEverythingReady(this)) {
+                val missing = PermissionManager.missingSettingsList(this).joinToString(", ")
+                Toast.makeText(
+                    this,
+                    "Abhi bhi baaki hai: $missing (jab tak sab ON nahi hoga, Location aur App band rahenge)",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            finish()
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        SetupWizard.runNext(this)
         refreshStatuses()
     }
 
     private fun refreshStatuses() {
+        val acc = PermissionManager.isAccessibilityServiceEnabled(this)
+        val ovl = PermissionManager.isOverlayPermissionGranted(this)
+        val notif = PermissionManager.isNotificationPermissionGranted(this)
+        val bat = PermissionManager.isBatteryOptimizationIgnored(this)
+        val allReady = acc && ovl && notif && bat
+
         setRow(
             binding.statusAccessibility,
-            PermissionManager.isAccessibilityServiceEnabled(this),
+            acc,
             "Accessibility Service: ON",
             "Accessibility Service: OFF (order auto-accept nahi hoga)"
         )
         setRow(
             binding.statusOverlay,
-            PermissionManager.isOverlayPermissionGranted(this),
+            ovl,
             "Display over other apps: Allowed",
             "Display over other apps: Not Allowed (bubble nahi dikhega)"
         )
         setRow(
             binding.statusNotification,
-            PermissionManager.isNotificationPermissionGranted(this),
+            notif,
             "Notifications: Allowed",
             "Notifications: Not Allowed (status icon nahi dikhega)"
+        )
+        setRow(
+            binding.statusBattery,
+            bat,
+            "Battery Optimization: Unrestricted",
+            "Battery Optimization: Restricted (background me app band ho jayega)"
+        )
+
+        binding.tvGateNotice.text = if (allReady) {
+            "\u2705 Sabhi zaroori settings ON hain! Ab aap Location set kar sakte hain aur App ON kar sakte hain."
+        } else {
+            "Jab tak upar ki sabhi 4 settings ON nahi hongi, tab tak Location set nahi hogi aur App OFF rahega."
+        }
+        binding.tvGateNotice.setTextColor(
+            android.graphics.Color.parseColor(if (allReady) "#81C784" else "#FFB74D")
         )
     }
 

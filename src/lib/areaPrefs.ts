@@ -420,19 +420,19 @@ export function setDropSelections(selections: SelectionMap): void {
 }
 
 export function getRejectPickupSelections(): SelectionMap {
-  return readSelections(KEY_REJECT_PICKUP_JSON);
+  return {};
 }
 
-export function setRejectPickupSelections(selections: SelectionMap): void {
-  writeSelections(KEY_REJECT_PICKUP_JSON, selections);
+export function setRejectPickupSelections(_selections: SelectionMap): void {
+  localStorage.removeItem(KEY_REJECT_PICKUP_JSON);
 }
 
 export function getRejectDropSelections(): SelectionMap {
-  return readSelections(KEY_REJECT_DROP_JSON);
+  return {};
 }
 
-export function setRejectDropSelections(selections: SelectionMap): void {
-  writeSelections(KEY_REJECT_DROP_JSON, selections);
+export function setRejectDropSelections(_selections: SelectionMap): void {
+  localStorage.removeItem(KEY_REJECT_DROP_JSON);
 }
 
 export function getPickupKeywords(): string[] {
@@ -547,8 +547,6 @@ export function removeCustomCity(city: string): void {
 export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
   const dropSelections = getDropSelections();
   const pickupSelections = getPickupSelections();
-  const rejectPickupSelections = getRejectPickupSelections();
-  const rejectDropSelections = getRejectDropSelections();
   const pickupKeywords = getPickupKeywords();
   const maxPickupKm = getMaxPickupKm();
   const allowMissingKm = getAllowPickupWhenKmMissing();
@@ -574,42 +572,7 @@ export function analyzeScreenText(rawScreenText: string): MatchAnalysis {
     };
   }
 
-  // 1. Check Reject (R) rules FIRST for Pickup & Drop
-  const rejectPickupHit = findMatchingSelection(rejectPickupSelections, pickupText, fullNorm);
-  if (rejectPickupHit) {
-    return {
-      matched: false,
-      rejected: true,
-      rejectedBy: `Pickup R: ${rejectPickupHit}`,
-      reason: `REJECT (R) — Pickup "${rejectPickupHit}" par R set hai`,
-      pickupText,
-      dropText,
-      pickupDistanceKm,
-      isTripDetails: false,
-      hasAcceptWord,
-      pickupMatchedBy: null,
-      dropMatchedBy: null,
-    };
-  }
-
-  const rejectDropHit = findMatchingSelection(rejectDropSelections, dropText, fullNorm);
-  if (rejectDropHit) {
-    return {
-      matched: false,
-      rejected: true,
-      rejectedBy: `Drop R: ${rejectDropHit}`,
-      reason: `REJECT (R) — Drop "${rejectDropHit}" par R set hai`,
-      pickupText,
-      dropText,
-      pickupDistanceKm,
-      isTripDetails: false,
-      hasAcceptWord,
-      pickupMatchedBy: null,
-      dropMatchedBy: null,
-    };
-  }
-
-  // 2. Check Drop Accept (A)
+  // 1. Check Drop Accept (A)
   if (Object.keys(dropSelections).length === 0) {
     return {
       matched: false,

@@ -10,10 +10,16 @@ import { TopBar } from './components/TopBar';
 import { isPaused as readPaused, setPaused as persistPaused } from './lib/areaPrefs';
 import { getLicenseState, refreshLicenseAsync } from './lib/licenseManager';
 import {
+  getMissingSettings,
   getPermissions,
-  grantAllViaRoot,
+  isEverythingReady,
   savePermissions,
 } from './lib/permissionManager';
+import {
+  autoCalibrateSwipeZone,
+  ensureAutoSwipeZoneCalibrated,
+  isSwipeZoneSet,
+} from './lib/swipeZone';
 import { checkForUpdate } from './lib/updateManager';
 import type {
   LicenseState,
@@ -26,24 +32,35 @@ import type {
 export function App() {
   const [activeScreen, setActiveScreen] = useState<ScreenId>('home');
   const [permissions, setPermissions] = useState<PermissionState>(() => getPermissions());
-  const [isPaused, setIsPaused] = useState<boolean>(() => readPaused());
+  const allSettingsReady = isEverythingReady(permissions);
+  const [isPaused, setIsPaused] = useState<boolean>(() => {
+    const ready = isEverythingReady(getPermissions());
+    if (!ready) {
+      persistPaused(true);
+      return true;
+    }
+    return readPaused();
+  });
   const [watcherStatus, setWatcherStatus] = useState<LiveWatcherStatus>(() =>
-    readPaused() ? 'OFF' : 'READY'
+    !isEverythingReady(getPermissions()) || readPaused() ? 'OFF' : 'READY'
   );
-  const [bubbleRunning, setBubbleRunning] = useState<boolean>(false);
-  const [rootReady, setRootReady] = useState<boolean>(false);
-  const [rootStateText, setRootStateText] = useState<string>('root try nahi hua');
-  const [screenWatcherRunning, setScreenWatcherRunning] = useState<boolean>(false);
+  const [bubbleRunning, setBubbleRunning] = useState<boolean>(() =>
+    isEverythingReady(getPermissions()) && getLicenseState().isActive
+  );
+  const bubbleManuallyOffRef = useRef<boolean>(false);
   const [debugOverlayEnabled, setDebugOverlayEnabled] = useState<boolean>(false);
   const [debugMessage, setDebugMessage] = useState<string>(
     'Service connected. canPerformGestures=true'
   );
   const [license, setLicense] = useState<LicenseState>(() => getLicenseState());
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [swipeZoneReady, setSwipeZoneReady] = useState<boolean>(() => {
+    ensureAutoSwipeZoneCalibrated();
+    return isSwipeZoneSet();
+  });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const toastTimer = useRef<number | null>(null);
-  const displayStreamRef = useRef<MediaStream | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -60,22 +77,25 @@ export function App() {
     checkForUpdate(false).then((res) => {
       if (res.info) setUpdateInfo(res.info);
     });
-    return () => {
-      if (displayStreamRef.current) {
-        displayStreamRef.current.getTracks().forEach((t) => t.stop());
+  }, []);
+
+  // Keep app OFF if any setting is missing, and auto-enable Floating Bubble once all settings are ON
+  useEffect(() => {
+    if (!allSettingsReady || !license.isActive) {
+      if (!isPaused) {
+        persistPaused(true);
+        setIsPaused(true);
       }
-    };
-  }, []);
-
-  const isRunning = permissions.accessibility && !isPaused && license.isActive;
-
-  const stopScreenWatcher = useCallback(() => {
-    if (displayStreamRef.current) {
-      displayStreamRef.current.getTracks().forEach((t) => t.stop());
-      displayStreamRef.current = null;
+      setWatcherStatus('OFF');
+      setBubbleRunning(false);
+      return;
     }
-    setScreenWatcherRunning(false);
-  }, []);
+    if (!bubbleManuallyOffRef.current) {
+      setBubbleRunning(true);
+    }
+  }, [allSettingsReady, license.isActive, isPaused]);
+
+  const isRunning = allSettingsReady && !isPaused && license.isActive;
 
   const handleToggleStartStop = () => {
     if (!license.isActive) {
@@ -83,8 +103,12 @@ export function App() {
       showToast('Pehle approval check karein');
       return;
     }
-    if (!permissions.accessibility) {
-      showToast('Pehle Accessibility Service ON karein');
+    if (!allSettingsReady) {
+      persistPaused(true);
+      setIsPaused(true);
+      setWatcherStatus('OFF');
+      const missing = getMissingSettings(permissions).join(', ');
+      showToast(`Pehle sabhi settings ON karein (${missing}), tabhi app ON hoga`);
       setActiveScreen('permissions');
       return;
     }
@@ -92,11 +116,12 @@ export function App() {
     persistPaused(nextPaused);
     setIsPaused(nextPaused);
     if (nextPaused) {
-      stopScreenWatcher();
       setBubbleRunning(false);
       setWatcherStatus('OFF');
       showToast('Auto-Accept STOP kar diya');
     } else {
+      bubbleManuallyOffRef.current = false;
+      setBubbleRunning(true);
       setWatcherStatus('READY');
       showToast('Auto-Accept START kar diya');
     }
@@ -109,46 +134,34 @@ export function App() {
       return;
     }
     const next = !bubbleRunning;
+    bubbleManuallyOffRef.current = !next;
     setBubbleRunning(next);
     showToast(next ? 'Floating Bubble ON' : 'Floating Bubble Band');
   };
 
-  const handleRunRootSetup = () => {
-    const nextPerms = grantAllViaRoot(permissions);
-    setPermissions(nextPerms);
-    setRootReady(true);
-    setRootStateText('ROOT OK (Web permissions granted)');
-    showToast('Root se permissions de di gayi');
-  };
-
-  const handleToggleScreenWatch = async () => {
-    if (screenWatcherRunning) {
-      stopScreenWatcher();
-      showToast('Screen Watcher BAND');
+  const handleAutoFixSwipeZone = () => {
+    if (!allSettingsReady) {
+      const missing = getMissingSettings(permissions).join(', ');
+      showToast(`Pehle sabhi settings ON karein (${missing})`);
+      navigateScreen('permissions');
       return;
     }
-    if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        displayStreamRef.current = stream;
-        stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-          setScreenWatcherRunning(false);
-          displayStreamRef.current = null;
-        });
-        setScreenWatcherRunning(true);
-        showToast('Screen Watcher ON');
-        return;
-      } catch {
-        // User cancelled or iframe disallows getDisplayMedia -> fall back cleanly
-      }
-    }
-    setScreenWatcherRunning(true);
-    showToast('Screen Watcher ON (Preview mode)');
+    autoCalibrateSwipeZone();
+    setSwipeZoneReady(true);
+    showToast('Swipe Zone is phone ke hisab se khud fix ho gaya! Ab upar-neeche set nahi karna padega.');
   };
 
   const handleUpdatePermissions = (next: PermissionState) => {
     savePermissions(next);
     setPermissions(next);
+    if (!isEverythingReady(next)) {
+      persistPaused(true);
+      setIsPaused(true);
+      setWatcherStatus('OFF');
+      setBubbleRunning(false);
+    } else if (!bubbleManuallyOffRef.current && license.isActive) {
+      setBubbleRunning(true);
+    }
   };
 
   const navigateScreen = useCallback((screen: ScreenId) => {
@@ -183,10 +196,20 @@ export function App() {
       navigateScreen('license');
       return;
     }
+    if (!allSettingsReady && (screen === 'areas' || screen === 'swipe')) {
+      const missing = getMissingSettings(permissions).join(', ');
+      showToast(`Pehle sabhi settings ON karein (${missing}), tabhi Location set hogi`);
+      navigateScreen('permissions');
+      return;
+    }
     navigateScreen(screen);
   };
 
-  const effectiveScreen: ScreenId = !license.isActive ? 'license' : activeScreen;
+  const effectiveScreen: ScreenId = !license.isActive
+    ? 'license'
+    : !allSettingsReady && (activeScreen === 'areas' || activeScreen === 'swipe')
+      ? 'permissions'
+      : activeScreen;
 
   return (
     <div className="min-h-screen bg-[#121212] text-white">
@@ -226,15 +249,12 @@ export function App() {
             isRunning={isRunning}
             watcherStatus={watcherStatus}
             bubbleRunning={bubbleRunning}
-            rootReady={rootReady}
-            rootStateText={rootStateText}
-            screenWatcherRunning={screenWatcherRunning}
+            swipeZoneReady={swipeZoneReady}
             debugOverlayEnabled={debugOverlayEnabled}
             onToggleStartStop={handleToggleStartStop}
             onNavigate={handleNavigate}
+            onAutoFixSwipeZone={handleAutoFixSwipeZone}
             onToggleBubble={handleToggleBubble}
-            onRunRootSetup={handleRunRootSetup}
-            onToggleScreenWatch={handleToggleScreenWatch}
             onToggleDebugOverlay={() => setDebugOverlayEnabled((prev) => !prev)}
             onSimulateWatcherAccept={(status, dbg) => {
               setWatcherStatus(status);
@@ -288,6 +308,7 @@ export function App() {
         watcherStatus={watcherStatus}
         onOpenAreas={() => handleNavigate('areas')}
         onCloseBubble={() => {
+          bubbleManuallyOffRef.current = true;
           setBubbleRunning(false);
           showToast('SwiftGate bubble band kiya');
         }}

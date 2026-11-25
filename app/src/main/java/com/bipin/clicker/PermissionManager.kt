@@ -3,6 +3,7 @@ package com.bipin.clicker
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 
@@ -26,7 +27,7 @@ object PermissionManager {
         }
     }
 
-    /** "Display over other apps" - floating bubble ke liye zaroori hai. */
+    /** "Display over other apps" - floating bubble aur swipe zone ke liye zaroori hai. */
     fun isOverlayPermissionGranted(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(context)
@@ -46,6 +47,17 @@ object PermissionManager {
         }
     }
 
+    /** Battery optimization se exempt (Unrestricted) hona zaroori hai warna background service band ho jati hai. */
+    fun isBatteryOptimizationIgnored(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return true
+            pm.isIgnoringBatteryOptimizations(context.packageName)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
     /**
      * Floating Bubble service abhi chal rahi hai ya nahi - service khud is flag ko
      * onCreate/onDestroy me set/clear karti hai.
@@ -55,9 +67,19 @@ object PermissionManager {
             .getBoolean("bubble_running", false)
     }
 
-    /** Sab kuch (Accessibility + Overlay + Notification) set hai ya nahi - ek nazar me. */
+    /** Sab kuch (Accessibility + Overlay + Notification + Battery Unrestricted) set hai ya nahi. */
     fun isEverythingReady(context: Context): Boolean =
         isAccessibilityServiceEnabled(context) &&
             isOverlayPermissionGranted(context) &&
-            isNotificationPermissionGranted(context)
+            isNotificationPermissionGranted(context) &&
+            isBatteryOptimizationIgnored(context)
+
+    fun missingSettingsList(context: Context): List<String> {
+        val missing = mutableListOf<String>()
+        if (!isAccessibilityServiceEnabled(context)) missing.add("Accessibility Service")
+        if (!isOverlayPermissionGranted(context)) missing.add("Display over other apps")
+        if (!isNotificationPermissionGranted(context)) missing.add("Notifications")
+        if (!isBatteryOptimizationIgnored(context)) missing.add("Battery Unrestricted")
+        return missing
+    }
 }
