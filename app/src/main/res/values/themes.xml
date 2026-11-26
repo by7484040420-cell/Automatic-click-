@@ -1,3 +1,7 @@
 <resources>
-    <style name="Theme.BipinClicker" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+    <style name="Theme.BipinClicker" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:statusBarColor">#121212</item>
+        <item name="android:navigationBarColor">#121212</item>
+    </style>
 </resources>

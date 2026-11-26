@@ -20,8 +20,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var lastResumeSyncAt = 0L
+    private var lastBubbleStartAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        LicenseManager.markOwnUiOpening(2200L)
         super.onCreate(savedInstanceState)
         // APPROVAL: bina approval ke app ki asli screen nahi khulegi
         if (!LicenseManager.isActive(this)) {
@@ -85,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+        LicenseManager.markOwnUiOpening(1800L)
         super.onResume()
         if (!::binding.isInitialized) return
         if (!LicenseManager.isActive(this)) {
@@ -93,24 +96,27 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastResumeSyncAt >= 60_000L) {
+        if (now - lastResumeSyncAt >= 300_000L) {
             lastResumeSyncAt = now
             LicenseManager.refreshAsync(this)
             UpdateManager.checkAndPrompt(this)
         }
-        SwipeZone.ensureAutoCalibrated(this)
+        runCatching { SwipeZone.ensureAutoCalibrated(this) }
         ensureAutoFloatingBubble()
-        refreshStatus()
+        runCatching { refreshStatus() }
     }
 
     private fun ensureAutoFloatingBubble() {
         if (!PermissionManager.isEverythingReady(this)) return
         if (AreaPrefs.isBubbleManuallyOff(this)) return
         if (PermissionManager.isFloatingBubbleRunning(this)) return
+        val now = System.currentTimeMillis()
+        if (now - lastBubbleStartAt < 2500L) return
+        lastBubbleStartAt = now
         try {
             ContextCompat.startForegroundService(this, Intent(this, FloatingBubbleService::class.java))
             binding.root.postDelayed({
-                if (!isFinishing && !isDestroyed) refreshStatus()
+                if (!isFinishing && !isDestroyed) runCatching { refreshStatus() }
             }, 350L)
         } catch (_: Exception) {
         }

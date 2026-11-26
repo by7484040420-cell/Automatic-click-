@@ -27,6 +27,12 @@ import kotlin.math.abs
 /** Floating live status button for the auto-accept service. */
 class FloatingBubbleService : Service() {
 
+    companion object {
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+    }
+
     private var windowManager: WindowManager? = null
     private var bubbleView: TextView? = null
     private lateinit var params: WindowManager.LayoutParams
@@ -53,6 +59,7 @@ class FloatingBubbleService : Service() {
         try {
             startForegroundWithNotification()
         } catch (e: Exception) {
+            isRunning = false
             Toast.makeText(
                 this,
                 "Bubble start nahi ho paya: ${e.message}",
@@ -64,10 +71,12 @@ class FloatingBubbleService : Service() {
 
         if (!PermissionManager.isEverythingReady(this)) {
             AreaPrefs.setPaused(this, true)
+            isRunning = false
             stopSelf()
             return
         }
 
+        isRunning = true
         setRunningFlag(true)
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
@@ -277,6 +286,7 @@ class FloatingBubbleService : Service() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         handler.removeCallbacksAndMessages(null)
         setRunningFlag(false)
 

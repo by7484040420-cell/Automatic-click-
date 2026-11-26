@@ -63,8 +63,7 @@ object PermissionManager {
      * onCreate/onDestroy me set/clear karti hai.
      */
     fun isFloatingBubbleRunning(context: Context): Boolean {
-        return context.getSharedPreferences("clicker_area_prefs", Context.MODE_PRIVATE)
-            .getBoolean("bubble_running", false)
+        return FloatingBubbleService.isRunning
     }
 
     /** Sab kuch (Accessibility + Overlay + Notification + Battery Unrestricted) set hai ya nahi. */

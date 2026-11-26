@@ -141,73 +141,122 @@ object ScreenOcrScanner {
 
     /**
      * Slider ke andar safed gol thumb (>> wala) ka center X, pixel se.
-     * Sirf slider ke left hisse me dhoondhta hai (text se pehle tak). Nahi mila to null.
+     * Slider ke left 48% hisse me dhoondhta hai aur center ke white circle ko accurately pakadta hai.
      */
     fun findThumbCenterX(bmp: Bitmap, slider: Rect): Int? {
-        val y = slider.centerY().coerceIn(0, bmp.height - 1)
+        val pillH = slider.height().coerceAtLeast(1)
         val from = slider.left.coerceAtLeast(0)
-        val to = minOf(slider.left + (slider.height() * 1.05f).toInt(), bmp.width - 1)
-        var first = -1
-        var last = -1
-        for (x in from..to) {
-            val c = bmp.getPixel(x, y)
-            if (Color.red(c) > 225 && Color.green(c) > 225 && Color.blue(c) > 225) {
-                if (first < 0) first = x
-                last = x
+        val to = minOf(slider.left + (slider.width() * 0.48f).toInt(), bmp.width - 1)
+        if (to <= from) return null
+
+        val yCandidates = intArrayOf(
+            slider.centerY().coerceIn(0, bmp.height - 1),
+            (slider.centerY() - pillH / 6).coerceIn(0, bmp.height - 1),
+            (slider.centerY() + pillH / 6).coerceIn(0, bmp.height - 1)
+        )
+        val maxInnerGap = (pillH * 0.28f).toInt().coerceAtLeast(4)
+
+        for (y in yCandidates) {
+            var bestStart = -1
+            var bestEnd = -1
+            var curStart = -1
+            var curEnd = -1
+            for (x in from..to) {
+                val c = bmp.getPixel(x, y)
+                val isWhite = Color.red(c) > 215 && Color.green(c) > 215 && Color.blue(c) > 215
+                if (isWhite) {
+                    if (curStart < 0 || x - curEnd > maxInnerGap) {
+                        if (curStart >= 0 && (curEnd - curStart) > (bestEnd - bestStart)) {
+                            bestStart = curStart
+                            bestEnd = curEnd
+                        }
+                        curStart = x
+                    }
+                    curEnd = x
+                }
+            }
+            if (curStart >= 0 && (curEnd - curStart) > (bestEnd - bestStart)) {
+                bestStart = curStart
+                bestEnd = curEnd
+            }
+            if (bestStart >= 0) {
+                val w = bestEnd - bestStart
+                if (w >= pillH * 0.45f && w <= pillH * 1.45f) {
+                    return (bestStart + bestEnd) / 2
+                }
             }
         }
-        if (first < 0) return null
-        val w = last - first
-        if (w < slider.height() * 0.5f || w > slider.height() * 1.3f) return null
-        return (first + last) / 2
+        return null
     }
 
     private fun isColored(c: Int): Boolean {
         val r = Color.red(c)
         val g = Color.green(c)
         val b = Color.blue(c)
-        return (maxOf(r, g, b) - minOf(r, g, b)) > 60
+        return (maxOf(r, g, b) - minOf(r, g, b)) > 45
     }
 
     /**
      * "Accept in 7s" text ke aas-paas ka rangeen (blue/green) slider pill dhoondhta hai.
-     * Pixel se dhoondhta hai, isliye photo / camera se dikhi screen par bhi (thoda-bahut) chalta hai.
+     * Pixel se dhoondhta hai, isliye photo / camera se dikhi screen par bhi chalta hai.
      * Slider na mile to null.
      */
     fun estimateSlider(bmp: Bitmap, text: Rect): Rect? {
         val w = bmp.width
         val h = bmp.height
         val cy = text.centerY().coerceIn(0, h - 1)
-        val refX = (text.right + 24).coerceIn(0, w - 1)
-        if (!isColored(bmp.getPixel(refX, cy))) return null
+        val probeXs = intArrayOf(
+            (text.right + 24).coerceIn(0, w - 1),
+            (text.left - 24).coerceIn(0, w - 1),
+            text.centerX().coerceIn(0, w - 1)
+        )
+        var refX = -1
+        var refY = cy
+        for (px in probeXs) {
+            if (isColored(bmp.getPixel(px, cy))) {
+                refX = px
+                break
+            }
+        }
+        if (refX < 0) {
+            val aboveY = (text.top - 10).coerceIn(0, h - 1)
+            val belowY = (text.bottom + 10).coerceIn(0, h - 1)
+            val cx = text.centerX().coerceIn(0, w - 1)
+            if (isColored(bmp.getPixel(cx, aboveY))) {
+                refX = cx
+                refY = aboveY
+            } else if (isColored(bmp.getPixel(cx, belowY))) {
+                refX = cx
+                refY = belowY
+            }
+        }
+        if (refX < 0) return null
 
-        var top = cy
+        var top = refY
         while (top > 0 && isColored(bmp.getPixel(refX, top - 1))) top--
-        var bottom = cy
+        var bottom = refY
         while (bottom < h - 1 && isColored(bmp.getPixel(refX, bottom + 1))) bottom++
         val pillH = bottom - top
         if (pillH < 26) return null
 
-        val gapMax = (pillH * 1.3f).toInt()
+        val gapMax = (pillH * 1.35f).toInt()
         val y = (top + bottom) / 2
 
-        var left = refX
         var last = refX
         var x = refX
         while (x > 0) {
             if (isColored(bmp.getPixel(x, y))) last = x else if (last - x > gapMax) break
             x--
         }
-        left = last
+        val left = last
 
-        var right = refX
         last = refX
         x = refX
         while (x < w - 1) {
             if (isColored(bmp.getPixel(x, y))) last = x else if (x - last > gapMax) break
             x++
         }
-        right = last
+        val right = last
 
         if (right - left < pillH * 2.2f) return null
         return Rect(left, top, right, bottom)

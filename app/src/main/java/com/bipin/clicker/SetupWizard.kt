@@ -106,10 +106,13 @@ object SetupWizard {
         toast(c, "Setup poora. Bubble ON hai to screen band nahi hogi.")
         // Floating bubble screen ON rakhta hai (FLAG_KEEP_SCREEN_ON) - isliye use chala do
         try {
-            if (PermissionManager.isOverlayPermissionGranted(c) &&
+            if (PermissionManager.isEverythingReady(c) &&
                 !PermissionManager.isFloatingBubbleRunning(c)
             ) {
-                c.startService(Intent(c, FloatingBubbleService::class.java))
+                androidx.core.content.ContextCompat.startForegroundService(
+                    c,
+                    Intent(c, FloatingBubbleService::class.java)
+                )
             }
         } catch (_: Exception) {
         }

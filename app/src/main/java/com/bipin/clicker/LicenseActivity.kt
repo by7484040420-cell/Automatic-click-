@@ -32,6 +32,7 @@ class LicenseActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        LicenseManager.markOwnUiOpening(2000L)
         super.onCreate(savedInstanceState)
         if (Integrity.isTampered(this)) throw IllegalStateException("Corrupted package")
         val d = resources.displayMetrics.density
@@ -137,6 +138,7 @@ class LicenseActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+        LicenseManager.markOwnUiOpening(1500L)
         super.onResume()
         UpdateManager.showBlockedNow(this)
         UpdateManager.checkAndPrompt(this)
@@ -173,7 +175,10 @@ class LicenseActivity : AppCompatActivity() {
 
     private fun goMain() {
         if (isFinishing) return
-        startActivity(Intent(this, MainActivity::class.java))
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        )
         finish()
     }
 }

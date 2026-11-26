@@ -19,7 +19,7 @@ object SwipeZone {
     var service: AccessibilityService? = null
 
     private const val PREFS = "swipe_zone"
-    private const val AUTO_ZONE_VERSION = 2
+    private const val AUTO_ZONE_VERSION = 3
 
     fun getScreenDimensions(ctx: Context): Pair<Int, Int> {
         try {
@@ -58,11 +58,11 @@ object SwipeZone {
         if (isWideTablet) {
             val cardW = minOf(w * 0.92f, 440f * density)
             val cardLeft = (w - cardW) / 2f
-            sx = cardLeft + cardW * 0.155f
-            ex = cardLeft + cardW * 0.92f
+            sx = cardLeft + cardW * 0.21f
+            ex = cardLeft + cardW * 0.91f
         } else {
-            // Porter slider blue pill ke andar safed (>>) thumb ~60dp par aur right end ~36dp andar hota hai
-            sx = (60f * density).coerceIn(w * 0.145f, w * 0.185f)
+            // Porter slider blue pill ke andar safed (>>) thumb ~21% width par aur right end ~89% par hota hai
+            sx = (74f * density).coerceIn(w * 0.18f, w * 0.23f)
             ex = (w - 36f * density).coerceIn(w * 0.87f, w * 0.91f)
         }
 

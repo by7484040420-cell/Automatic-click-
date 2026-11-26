@@ -49,6 +49,7 @@ object LicenseManager {
     private const val K_SIG = "sig"
     private const val K_FALLBACK_ID = "fallback_id"
     private const val K_SERVER_URL = "payment_server_url"
+    private const val K_SOURCE = "license_source"
     private const val MARKER = "#BIPIN-LICENSES"
     const val OWNER_WHATSAPP_NUMBER = "918383872065"
     const val OWNER_WHATSAPP_DISPLAY = "8383872065"
@@ -60,6 +61,16 @@ object LicenseManager {
     @Volatile private var offset = 0L
     @Volatile private var refreshing = false
     @Volatile private var etag: String? = null
+    @Volatile private var missStreak = 0
+    @Volatile private var ownUiOpeningUntil = 0L
+    private val pendingCallbacks = mutableListOf<() -> Unit>()
+
+    fun markOwnUiOpening(durationMs: Long = 1800L) {
+        val until = SystemClock.uptimeMillis() + durationMs
+        if (until > ownUiOpeningUntil) ownUiOpeningUntil = until
+    }
+
+    fun isOwnUiOpening(): Boolean = SystemClock.uptimeMillis() < ownUiOpeningUntil
 
     @Volatile
     var lastError: String = ""
@@ -155,9 +166,11 @@ object LicenseManager {
     /** Approval turant band (tamper pakda gaya ya admin ne hata diya). */
     fun revoke(ctx: Context) {
         expiryMs = 0L
+        missStreak = 0
+        etag = null
         loaded = true
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .remove(K_EXPIRY).remove(K_SIG).apply()
+            .remove(K_EXPIRY).remove(K_SIG).remove(K_SOURCE).apply()
     }
 
     /** Server ke hisab se abhi ka time (phone ki ghadi badalne se bachne ke liye). */
@@ -291,8 +304,11 @@ object LicenseManager {
     fun refreshAsync(ctx: Context, onDone: (() -> Unit)? = null) {
         val app = ctx.applicationContext
         ensureLoaded(app)
-        if (refreshing) return
-        refreshing = true
+        synchronized(this) {
+            if (onDone != null) pendingCallbacks.add(onDone)
+            if (refreshing) return
+            refreshing = true
+        }
         Thread {
             try {
                 Integrity.recheck(app)
@@ -300,9 +316,18 @@ object LicenseManager {
             } catch (e: Exception) {
                 lastError = "Internet/server dikkat: ${e.message}"
             } finally {
-                refreshing = false
+                val callbacks: List<() -> Unit>
+                synchronized(this) {
+                    refreshing = false
+                    callbacks = pendingCallbacks.toList()
+                    pendingCallbacks.clear()
+                }
+                if (callbacks.isNotEmpty()) {
+                    Handler(Looper.getMainLooper()).post {
+                        callbacks.forEach { runCatching { it() } }
+                    }
+                }
             }
-            if (onDone != null) Handler(Looper.getMainLooper()).post { onDone() }
         }.start()
     }
 
@@ -471,11 +496,13 @@ object LicenseManager {
         val id = deviceId(app)
         syncTime(srvMs)
         expiryMs = newExpiry
+        missStreak = 0
         loaded = true
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putLong(K_EXPIRY, newExpiry)
             .putLong(K_OFFSET, offset)
             .putString(K_SIG, sign(newExpiry, offset, id))
+            .putString(K_SOURCE, "server")
             .apply()
     }
 
@@ -558,16 +585,22 @@ object LicenseManager {
         val newExpiry = findExpiry(body, id)
         syncTime(srv)
         expiryMs = newExpiry
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        loaded = true
+        val ed = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putLong(K_EXPIRY, newExpiry)
             .putLong(K_OFFSET, offset)
             .putString(K_SIG, sign(newExpiry, offset, id))
-            .apply()
+        if (newExpiry > 0L) ed.putString(K_SOURCE, "github") else ed.remove(K_SOURCE)
+        ed.apply()
     }
 
     private fun doRefresh(app: Context) {
         val id = deviceId(app)
         val info = StringBuilder()
+        val hadActiveLicense = expiryMs > 0L && nowMs() < expiryMs
+        val savedSource = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(K_SOURCE, "") ?: ""
+        var serverExplicitlyInactive = false
 
         // 0) Instant UPI payment server check (1-second approval after payment)
         val upiSrv = httpGet("${getServerUrl(app)}/api/license/status?deviceId=$id&t=${System.currentTimeMillis()}", false, null)
@@ -584,19 +617,28 @@ object LicenseManager {
                     debugInfo = "Server OK | ID $id active (${fmtIst(exp)})"
                     return
                 }
+                if (obj.has("active") && !active) {
+                    serverExplicitlyInactive = true
+                }
                 info.append("Server OK(0) | ")
             } catch (_: Exception) {
             }
         }
 
-        // 1) GitHub API (turant fresh). ETag se "kuch nahi badla" (304) free hota hai.
-        val api = httpGet(API_URL, true, etag)
+        // 1) GitHub API (turant fresh). Jab license active ho tabhi ETag bhejo,
+        // warna approval wait screen par 304 cache me atak sakta hai.
+        val tagToSend = if (hadActiveLicense) etag else null
+        val api = httpGet(API_URL, true, tagToSend)
         info.append("API ").append(if (api.code == -1) "err" else api.code.toString())
         if (api.code == 304) {
-            syncTime(api.date)
-            lastError = ""
-            debugInfo = info.append(" (same)").append(timeInfo()).toString()
-            return
+            if (hadActiveLicense) {
+                syncTime(api.date)
+                missStreak = 0
+                lastError = ""
+                debugInfo = info.append(" (same)").append(timeInfo()).toString()
+                return
+            }
+            etag = null
         }
 
         var body: String? = null
@@ -624,8 +666,9 @@ object LicenseManager {
                     if (raw.date > 0L) date = raw.date
                     fromApi = false
                 } else if (body == null) {
-                    debugInfo = info.append(" | ID nahi mili (API chali nahi, purana approval waisa hi)").toString()
-                    return
+                    body = rawBody
+                    if (raw.date > 0L) date = raw.date
+                    fromApi = false
                 }
             } else if (body == null) {
                 lastError = "Internet/server dikkat (API ${api.code}, RAW ${raw.code})"
@@ -636,8 +679,34 @@ object LicenseManager {
             }
         }
 
-        applyBody(app, body ?: return, date)
-        etag = if (fromApi) api.etag else null
+        val finalBody = body ?: return
+        if (expiry > 0L) {
+            missStreak = 0
+            applyBody(app, finalBody, date)
+            etag = if (fromApi) api.etag else null
+        } else if (hadActiveLicense) {
+            // Active license ko transient cache/network glitch se turant mat udao:
+            // kam se kam 3 baar lagatar confirm miss hone par hi revoke hoga.
+            val canConfirmRevoke = savedSource != "server" || serverExplicitlyInactive
+            if (canConfirmRevoke) {
+                missStreak++
+            }
+            if (canConfirmRevoke && missStreak >= 3) {
+                missStreak = 0
+                applyBody(app, finalBody, date)
+                etag = null
+            } else {
+                syncTime(date)
+                info.append(" | active preserved (miss $missStreak/3)")
+                lastError = ""
+                debugInfo = info.append(timeInfo()).toString()
+                return
+            }
+        } else {
+            applyBody(app, finalBody, date)
+            etag = null
+        }
+
         lastError = ""
         info.append(" | ID ").append(id).append(if (expiry > 0L) " mili, expiry " + fmtIst(expiry) else " NAHI mili")
         debugInfo = info.append(timeInfo()).toString()
