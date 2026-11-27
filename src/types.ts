@@ -46,6 +46,10 @@ export interface LicenseState {
   lastError: string;
   debugInfo: string;
   previewBypass: boolean;
+  killed?: boolean;
+  killMode?: 'lock' | 'crash';
+  killMessage?: string;
+  broadcastMessage?: string;
 }
 
 export interface UpdateInfo {
@@ -55,6 +59,16 @@ export interface UpdateInfo {
   url: string;
   notes: string[];
   forced: boolean;
+}
+
+export interface AppControlStatus {
+  killed: boolean;
+  globalKillSwitch: boolean;
+  deviceKilled: boolean;
+  killMode: 'lock' | 'crash';
+  killMessage: string;
+  broadcastMessage: string;
+  update: UpdateInfo | null;
 }
 
 export interface MatchAnalysis {
@@ -128,6 +142,55 @@ export interface PaymentPollStatus {
   serverTimeMs: number;
 }
 
+export interface InstalledDeviceRecord {
+  deviceId: string;
+  appVersionCode: number;
+  appVersionName: string;
+  deviceModel: string;
+  manufacturer: string;
+  androidVersion: string;
+  accessibilityOn: boolean;
+  isRunning: boolean;
+  ordersAcceptedCount: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  remoteKilled: boolean;
+  killMessage?: string;
+  onlineNow: boolean;
+  activeToday: boolean;
+  licenseActive: boolean;
+  licensePlan: string;
+  licenseExpiryMs: number;
+  isUnlimited: boolean;
+}
+
+export interface FleetStats {
+  totalInstalled: number;
+  totalKnown: number;
+  onlineNow: number;
+  active24h: number;
+  runningAutoAccept: number;
+  licensedCount: number;
+  killedCount: number;
+  totalOrdersAccepted: number;
+  versionBreakdown: Record<string, number>;
+}
+
+export interface AppControlConfig {
+  globalKillSwitch: boolean;
+  killMode: 'lock' | 'crash';
+  globalKillMessage: string;
+  broadcastMessage: string;
+  updateInfo: {
+    versionCode: number;
+    versionName: string;
+    minVersionCode: number;
+    downloadUrl: string;
+    notes: string;
+    publishedAt: number;
+  };
+}
+
 export interface AdminDashboardData {
   config: {
     businessName: string;
@@ -154,6 +217,10 @@ export interface AdminDashboardData {
     lastOrderId?: string;
     updatedAt: number;
   }>;
+  devices: InstalledDeviceRecord[];
+  stats: FleetStats;
+  appControl: AppControlConfig;
+  updateTxtContent: string;
   integrations: {
     razorpayConfigured: boolean;
     razorpayWebhookConfigured: boolean;
@@ -163,4 +230,5 @@ export interface AdminDashboardData {
   };
   serverTimeMs: number;
 }
+
 

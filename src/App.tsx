@@ -20,8 +20,9 @@ import {
   ensureAutoSwipeZoneCalibrated,
   isSwipeZoneSet,
 } from './lib/swipeZone';
-import { checkForUpdate } from './lib/updateManager';
+import { checkForUpdate, fetchAppControlStatus } from './lib/updateManager';
 import type {
+  AppControlStatus,
   LicenseState,
   LiveWatcherStatus,
   PermissionState,
@@ -54,6 +55,7 @@ export function App() {
   );
   const [license, setLicense] = useState<LicenseState>(() => getLicenseState());
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [appControl, setAppControl] = useState<AppControlStatus | null>(null);
   const [swipeZoneReady, setSwipeZoneReady] = useState<boolean>(() => {
     ensureAutoSwipeZoneCalibrated();
     return isSwipeZoneSet();
@@ -79,9 +81,30 @@ export function App() {
     });
   }, []);
 
-  // Keep app OFF if any setting is missing, and auto-enable Floating Bubble once all settings are ON
   useEffect(() => {
-    if (!allSettingsReady || !license.isActive) {
+    fetchAppControlStatus(false).then((res) => {
+      if (res?.control) {
+        setAppControl(res.control);
+        if (res.control.update) setUpdateInfo(res.control.update);
+      }
+    });
+  }, [license]);
+
+  const isRemoteKilled = Boolean(license.killed || appControl?.killed);
+  const effectiveKillMode = license.killed
+    ? license.killMode || 'lock'
+    : appControl?.killMode || 'lock';
+  const effectiveKillMessage =
+    (license.killed ? license.killMessage : '') ||
+    appControl?.killMessage ||
+    'App temporarily disabled by Owner.';
+  const broadcastMessage =
+    license.broadcastMessage || appControl?.broadcastMessage || '';
+  const effectiveLicenseActive = license.isActive && !isRemoteKilled;
+
+  // Keep app OFF if any setting is missing or remote kill switch is active, and auto-enable Floating Bubble once all settings are ON
+  useEffect(() => {
+    if (!allSettingsReady || !effectiveLicenseActive) {
       if (!isPaused) {
         persistPaused(true);
         setIsPaused(true);
@@ -93,14 +116,14 @@ export function App() {
     if (!bubbleManuallyOffRef.current) {
       setBubbleRunning(true);
     }
-  }, [allSettingsReady, license.isActive, isPaused]);
+  }, [allSettingsReady, effectiveLicenseActive, isPaused]);
 
-  const isRunning = allSettingsReady && !isPaused && license.isActive;
+  const isRunning = allSettingsReady && !isPaused && effectiveLicenseActive;
 
   const handleToggleStartStop = () => {
-    if (!license.isActive) {
+    if (!effectiveLicenseActive) {
       setActiveScreen('license');
-      showToast('Pehle approval check karein');
+      showToast(isRemoteKilled ? 'Owner Kill Switch ON hai' : 'Pehle approval check karein');
       return;
     }
     if (!allSettingsReady) {
@@ -159,7 +182,7 @@ export function App() {
       setIsPaused(true);
       setWatcherStatus('OFF');
       setBubbleRunning(false);
-    } else if (!bubbleManuallyOffRef.current && license.isActive) {
+    } else if (!bubbleManuallyOffRef.current && effectiveLicenseActive) {
       setBubbleRunning(true);
     }
   };
@@ -191,8 +214,12 @@ export function App() {
   }, []);
 
   const handleNavigate = (screen: ScreenId) => {
-    if (!license.isActive && screen !== 'license') {
-      showToast('Approval zaroori hai — pehle Device ID approve karwayein');
+    if (!effectiveLicenseActive && screen !== 'license') {
+      showToast(
+        isRemoteKilled
+          ? 'Owner ne App Kill Switch ON kiya hua hai'
+          : 'Approval zaroori hai — pehle Device ID approve karwayein'
+      );
       navigateScreen('license');
       return;
     }
@@ -205,7 +232,7 @@ export function App() {
     navigateScreen(screen);
   };
 
-  const effectiveScreen: ScreenId = !license.isActive
+  const effectiveScreen: ScreenId = !effectiveLicenseActive
     ? 'license'
     : !allSettingsReady && (activeScreen === 'areas' || activeScreen === 'swipe')
       ? 'permissions'
@@ -226,6 +253,23 @@ export function App() {
         watcherStatus={watcherStatus}
         onToggleRun={handleToggleStartStop}
       />
+
+      {/* Remote Owner Kill Switch Alert */}
+      {isRemoteKilled && (
+        <div className="border-b border-red-500/40 bg-red-950/70 px-4 py-3 text-center text-xs text-red-100">
+          <div className="font-bold uppercase tracking-wider text-red-300">
+            Owner Kill Switch Active ({effectiveKillMode === 'crash' ? 'Crash / Force Stop Mode' : 'Lock Mode'})
+          </div>
+          <div className="mt-0.5">{effectiveKillMessage}</div>
+        </div>
+      )}
+
+      {/* Owner Broadcast Banner */}
+      {broadcastMessage && (
+        <div className="border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-center text-xs font-medium text-amber-200">
+          Notice: {broadcastMessage}
+        </div>
+      )}
 
       {/* Forced Update Banner */}
       {updateInfo?.forced && effectiveScreen !== 'license' && (

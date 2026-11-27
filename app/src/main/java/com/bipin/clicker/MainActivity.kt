@@ -25,6 +25,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         LicenseManager.markOwnUiOpening(2200L)
         super.onCreate(savedInstanceState)
+        if (UpdateManager.enforceKillSwitchIfNeeded(this, this)) {
+            return
+        }
         // APPROVAL: bina approval ke app ki asli screen nahi khulegi
         if (!LicenseManager.isActive(this)) {
             startActivity(Intent(this, LicenseActivity::class.java))
@@ -90,20 +93,52 @@ class MainActivity : AppCompatActivity() {
         LicenseManager.markOwnUiOpening(1800L)
         super.onResume()
         if (!::binding.isInitialized) return
+        if (UpdateManager.enforceKillSwitchIfNeeded(this, this)) {
+            return
+        }
         if (!LicenseManager.isActive(this)) {
             startActivity(Intent(this, LicenseActivity::class.java))
             finish()
             return
         }
+        val accessibilityOn = PermissionManager.isAccessibilityServiceEnabled(this)
+        val allReady = PermissionManager.isEverythingReady(this)
+        val runningNow = allReady && !AreaPrefs.isPaused(this)
         val now = System.currentTimeMillis()
-        if (now - lastResumeSyncAt >= 300_000L) {
+        if (now - lastResumeSyncAt >= 60_000L) {
             lastResumeSyncAt = now
+            LicenseManager.sendHeartbeatAsync(
+                ctx = this,
+                isRunning = runningNow,
+                accessibilityOn = accessibilityOn,
+                ordersAccepted = AreaPrefs.getOrdersAcceptedCount(this)
+            ) {
+                if (isFinishing || isDestroyed) return@sendHeartbeatAsync
+                if (UpdateManager.enforceKillSwitchIfNeeded(this, this)) return@sendHeartbeatAsync
+                runCatching { applyWarnAndBroadcast() }
+            }
             LicenseManager.refreshAsync(this)
             UpdateManager.checkAndPrompt(this)
         }
+        runCatching { applyWarnAndBroadcast() }
         runCatching { SwipeZone.ensureAutoCalibrated(this) }
         ensureAutoFloatingBubble()
         runCatching { refreshStatus() }
+    }
+
+    private fun applyWarnAndBroadcast() {
+        val broadcast = UpdateManager.getBroadcastMessage(this)
+        if (broadcast.isNotBlank()) {
+            binding.tvWarn.visibility = View.VISIBLE
+            binding.tvWarn.text = "Notice: $broadcast"
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            binding.tvWarn.visibility = View.VISIBLE
+            binding.tvWarn.text = "Is phone me Android ${Build.VERSION.RELEASE} hai. " +
+                "Asli (tez) order-detect tareeka yahan bhi chalega; sirf OCR wala backup " +
+                "(Android 11+ ka) is phone par kaam nahi karega."
+        } else {
+            binding.tvWarn.visibility = View.GONE
+        }
     }
 
     private fun ensureAutoFloatingBubble() {

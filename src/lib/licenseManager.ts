@@ -1,5 +1,6 @@
 import type {
   AdminDashboardData,
+  AppControlConfig,
   LicenseState,
   PaymentOrderData,
   PaymentPollStatus,
@@ -17,6 +18,10 @@ const K_PREVIEW_BYPASS = 'swiftgate_preview_unlocked';
 
 let lastError = '';
 let debugInfo = '';
+let remoteKilled = false;
+let remoteKillMode: 'lock' | 'crash' = 'lock';
+let remoteKillMessage = '';
+let remoteBroadcastMessage = '';
 
 export function getDeviceId(): string {
   let existing = localStorage.getItem(K_DEVICE_ID);
@@ -130,6 +135,10 @@ export function getLicenseState(): LicenseState {
     lastError,
     debugInfo,
     previewBypass,
+    killed: remoteKilled,
+    killMode: remoteKillMode,
+    killMessage: remoteKillMessage,
+    broadcastMessage: remoteBroadcastMessage,
   };
 }
 
@@ -147,9 +156,17 @@ export async function refreshLicenseAsync(): Promise<LicenseState> {
       serverChecked = true;
       const data = (await apiRes.json()) as {
         active?: boolean;
+        killed?: boolean;
+        killMode?: 'lock' | 'crash';
+        killMessage?: string;
+        broadcastMessage?: string;
         expiryMs?: number;
         isUnlimited?: boolean;
       };
+      remoteKilled = Boolean(data.killed);
+      remoteKillMode = data.killMode === 'crash' ? 'crash' : 'lock';
+      remoteKillMessage = typeof data.killMessage === 'string' ? data.killMessage : '';
+      remoteBroadcastMessage = typeof data.broadcastMessage === 'string' ? data.broadcastMessage : '';
       if (data.active && typeof data.expiryMs === 'number' && data.expiryMs > 0) {
         serverExpiry = data.isUnlimited ? Number.MAX_SAFE_INTEGER : data.expiryMs;
       }
@@ -368,4 +385,74 @@ export async function adminRevokeDevice(token: string, deviceId: string): Promis
   const data = (await res.json()) as { error?: string };
   if (!res.ok) throw new Error(data.error || 'Revoke fail');
 }
+
+export async function adminKillDevice(
+  token: string,
+  deviceId: string,
+  killed: boolean,
+  killMessage?: string
+): Promise<void> {
+  const res = await fetch(`/api/admin/devices/${encodeURIComponent(deviceId)}/kill`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ killed, killMessage: killMessage || '' }),
+  });
+  const data = (await res.json()) as { error?: string };
+  if (!res.ok) throw new Error(data.error || 'Device action fail');
+}
+
+export async function adminDeleteDevice(token: string, deviceId: string): Promise<void> {
+  const res = await fetch(`/api/admin/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const data = (await res.json()) as { error?: string };
+  if (!res.ok) throw new Error(data.error || 'Device remove fail');
+}
+
+export async function adminUpdateAppControl(
+  token: string,
+  payload: {
+    globalKillSwitch?: boolean;
+    killMode?: 'lock' | 'crash';
+    globalKillMessage?: string;
+    broadcastMessage?: string;
+    pushToGitHub?: boolean;
+    updateInfo?: AppControlConfig['updateInfo'];
+  }
+): Promise<{
+  appControl: AppControlConfig;
+  updateTxtContent: string;
+  githubPushed: boolean;
+  githubError?: string;
+}> {
+  const res = await fetch('/api/admin/app-control', {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = (await res.json()) as {
+    appControl?: AppControlConfig;
+    updateTxtContent?: string;
+    githubPushed?: boolean;
+    githubError?: string;
+    error?: string;
+  };
+  if (!res.ok || !data.appControl) throw new Error(data.error || 'Update publish fail');
+  return {
+    appControl: data.appControl,
+    updateTxtContent: data.updateTxtContent || '',
+    githubPushed: Boolean(data.githubPushed),
+    githubError: data.githubError,
+  };
+}
+
 

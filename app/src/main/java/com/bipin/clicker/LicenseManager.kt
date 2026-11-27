@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -34,7 +35,7 @@ import javax.crypto.spec.SecretKeySpec
  */
 object LicenseManager {
 
-    private const val DEFAULT_SERVER_URL = "https://automatic-click.ai.studio"
+    private const val DEFAULT_SERVER_URL = "https://ais-pre-j2axghsog452izesf624kh-110169053172.asia-east1.run.app"
     private const val LEGACY_404_URL = "https://ais-pre-6tn427fii6ngl2aha7z3rg-110169053172.asia-east1.run.app"
 
     // Aapka GitHub username: by7484040420-cell, repo: bipin-licenses, file: licenses.txt
@@ -183,6 +184,7 @@ object LicenseManager {
     /** Order wale code me yahi check lagta hai. Sirf memory padhta hai, internet nahi. */
     fun isActive(ctx: Context): Boolean {
         if (Integrity.isTampered(ctx)) return false
+        if (UpdateManager.isRemoteKilled(ctx)) return false
         // Zaroori update aaya hai aur ye purana version hai -> band
         if (UpdateManager.isBlocked(ctx)) return false
         ensureLoaded(ctx)
@@ -326,6 +328,92 @@ object LicenseManager {
                     Handler(Looper.getMainLooper()).post {
                         callbacks.forEach { runCatching { it() } }
                     }
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * Device install count, version, model aur live auto-accept telemetry server ko bhejta hai
+     * aur server se Kill Switch / Broadcast / Forced Update / License status laata hai.
+     */
+    fun sendHeartbeatAsync(
+        ctx: Context,
+        isRunning: Boolean,
+        accessibilityOn: Boolean,
+        ordersAccepted: Int,
+        onDone: (() -> Unit)? = null
+    ) {
+        val app = ctx.applicationContext
+        ensureLoaded(app)
+        Thread {
+            try {
+                val id = deviceId(app)
+                val payload = JSONObject().apply {
+                    put("deviceId", id)
+                    put("appVersionCode", UpdateManager.currentCode(app))
+                    put("appVersionName", UpdateManager.currentName(app).ifBlank { "1.3" })
+                    put("deviceModel", Build.MODEL ?: "Android")
+                    put("manufacturer", Build.MANUFACTURER ?: "")
+                    put("androidVersion", Build.VERSION.RELEASE ?: "")
+                    put("accessibilityOn", accessibilityOn)
+                    put("isRunning", isRunning)
+                    put("ordersAcceptedCount", ordersAccepted)
+                }
+                val res = httpPostJson("${getServerUrl(app)}/api/device/heartbeat", payload.toString())
+                if (res.code == 200 && !res.body.isNullOrBlank()) {
+                    val obj = JSONObject(res.body)
+                    val killed = obj.optBoolean("killed", false)
+                    val killMode = obj.optString("killMode", "lock")
+                    val killMsg = obj.optString("killMessage", "")
+                    val broadcast = obj.optString("broadcastMessage", "")
+                    val licenseActive = obj.optBoolean("licenseActive", false)
+                    val isUnlim = obj.optBoolean("isUnlimited", false)
+                    val exp = if (isUnlim) Long.MAX_VALUE else obj.optLong("expiryMs", 0L)
+                    val srvMs = obj.optLong("serverTimeMs", System.currentTimeMillis())
+
+                    val upd = obj.optJSONObject("update")
+                    val uCode = upd?.optInt("code", 0) ?: 0
+                    val uName = upd?.optString("name", "") ?: ""
+                    val uMin = upd?.optInt("minCode", 0) ?: 0
+                    val uUrl = upd?.optString("url", "") ?: ""
+                    val uNotesArr = upd?.optJSONArray("notes")
+                    val uNotes = mutableListOf<String>()
+                    if (uNotesArr != null) {
+                        for (i in 0 until uNotesArr.length()) {
+                            val line = uNotesArr.optString(i, "").trim()
+                            if (line.isNotEmpty()) uNotes.add(line)
+                        }
+                    }
+
+                    UpdateManager.applyServerControl(
+                        ctx = app,
+                        killed = killed,
+                        killMode = killMode,
+                        killMsg = killMsg,
+                        broadcast = broadcast,
+                        updateCode = uCode,
+                        updateName = uName,
+                        minCode = uMin,
+                        url = uUrl,
+                        notes = uNotes
+                    )
+
+                    if (!killed && licenseActive && exp > 0L) {
+                        applyServerLicense(app, exp, srvMs)
+                    } else if (!killed && !licenseActive && srvMs > 0L) {
+                        syncTime(srvMs)
+                        val savedSource = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                            .getString(K_SOURCE, "") ?: ""
+                        if (savedSource == "server") {
+                            revoke(app)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                if (onDone != null) {
+                    Handler(Looper.getMainLooper()).post { runCatching { onDone() } }
                 }
             }
         }.start()
@@ -602,11 +690,21 @@ object LicenseManager {
             .getString(K_SOURCE, "") ?: ""
         var serverExplicitlyInactive = false
 
-        // 0) Instant UPI payment server check (1-second approval after payment)
+        // 0) Instant UPI payment server check + remote kill/broadcast status
         val upiSrv = httpGet("${getServerUrl(app)}/api/license/status?deviceId=$id&t=${System.currentTimeMillis()}", false, null)
         if (upiSrv.code == 200 && !upiSrv.body.isNullOrBlank()) {
             try {
                 val obj = JSONObject(upiSrv.body)
+                val killed = obj.optBoolean("killed", false)
+                val killMode = obj.optString("killMode", "lock")
+                val killMsg = obj.optString("killMessage", "")
+                val broadcast = obj.optString("broadcastMessage", "")
+                UpdateManager.applyServerKillAndBroadcast(app, killed, killMode, killMsg, broadcast)
+                if (killed) {
+                    lastError = killMsg.ifBlank { "Owner ne app band kiya hua hai" }
+                    debugInfo = "Kill Switch ON ($killMode) | ID $id"
+                    return
+                }
                 val active = obj.optBoolean("active", false)
                 val isUnlim = obj.optBoolean("isUnlimited", false)
                 val exp = if (isUnlim) Long.MAX_VALUE else obj.optLong("expiryMs", 0L)

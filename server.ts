@@ -65,6 +65,37 @@ export interface LicenseRecord {
   updatedAt: number;
 }
 
+export interface InstalledDeviceRecord {
+  deviceId: string;
+  appVersionCode: number;
+  appVersionName: string;
+  deviceModel: string;
+  manufacturer: string;
+  androidVersion: string;
+  accessibilityOn: boolean;
+  isRunning: boolean;
+  ordersAcceptedCount: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  remoteKilled: boolean;
+  killMessage?: string;
+}
+
+export interface AppControlConfig {
+  globalKillSwitch: boolean;
+  killMode: 'lock' | 'crash';
+  globalKillMessage: string;
+  broadcastMessage: string;
+  updateInfo: {
+    versionCode: number;
+    versionName: string;
+    minVersionCode: number;
+    downloadUrl: string;
+    notes: string;
+    publishedAt: number;
+  };
+}
+
 interface StoreState {
   adminPasswordHash?: string;
   webhookSecretHash?: string;
@@ -76,6 +107,8 @@ interface StoreState {
   orders: Record<string, PaymentOrder>;
   licenses: Record<string, LicenseRecord>;
   usedUtrs: Record<string, string>; // utr -> orderId
+  devices: Record<string, InstalledDeviceRecord>;
+  appControl: AppControlConfig;
 }
 
 const DEFAULT_PLANS: SubscriptionPlan[] = [
@@ -87,6 +120,23 @@ const DEFAULT_PLANS: SubscriptionPlan[] = [
 const DEFAULT_BUSINESS_NAME = 'SwiftGate';
 const DEFAULT_BUSINESS_UPI_VPA = 'paytmqr5i4hko@ptys';
 
+function createDefaultAppControl(): AppControlConfig {
+  return {
+    globalKillSwitch: false,
+    killMode: 'lock',
+    globalKillMessage: 'App abhi Owner dwara temporarily band kiya gaya hai.',
+    broadcastMessage: '',
+    updateInfo: {
+      versionCode: 3,
+      versionName: '1.3',
+      minVersionCode: 1,
+      downloadUrl: '',
+      notes: '',
+      publishedAt: 0,
+    },
+  };
+}
+
 function createDefaultStore(): StoreState {
   return {
     config: {
@@ -97,6 +147,8 @@ function createDefaultStore(): StoreState {
     orders: {},
     licenses: {},
     usedUtrs: {},
+    devices: {},
+    appControl: createDefaultAppControl(),
   };
 }
 
@@ -110,6 +162,40 @@ function loadStore(): StoreState {
     const def = createDefaultStore();
     const envVpa = (process.env.BUSINESS_UPI_VPA || '').trim();
     const envName = (process.env.BUSINESS_NAME || '').trim();
+    const rawCtrl = parsed.appControl;
+    const defCtrl = def.appControl;
+    const appControl: AppControlConfig = {
+      globalKillSwitch: Boolean(rawCtrl?.globalKillSwitch),
+      killMode: rawCtrl?.killMode === 'crash' ? 'crash' : 'lock',
+      globalKillMessage:
+        typeof rawCtrl?.globalKillMessage === 'string' && rawCtrl.globalKillMessage.trim()
+          ? rawCtrl.globalKillMessage.trim().slice(0, 240)
+          : defCtrl.globalKillMessage,
+      broadcastMessage:
+        typeof rawCtrl?.broadcastMessage === 'string'
+          ? rawCtrl.broadcastMessage.trim().slice(0, 240)
+          : '',
+      updateInfo: {
+        versionCode:
+          typeof rawCtrl?.updateInfo?.versionCode === 'number' && Number.isFinite(rawCtrl.updateInfo.versionCode)
+            ? rawCtrl.updateInfo.versionCode
+            : defCtrl.updateInfo.versionCode,
+        versionName:
+          typeof rawCtrl?.updateInfo?.versionName === 'string'
+            ? rawCtrl.updateInfo.versionName.slice(0, 24)
+            : defCtrl.updateInfo.versionName,
+        minVersionCode:
+          typeof rawCtrl?.updateInfo?.minVersionCode === 'number' &&
+          Number.isFinite(rawCtrl.updateInfo.minVersionCode)
+            ? rawCtrl.updateInfo.minVersionCode
+            : defCtrl.updateInfo.minVersionCode,
+        downloadUrl: isSafeHttpsUrl(rawCtrl?.updateInfo?.downloadUrl) ? rawCtrl.updateInfo.downloadUrl : '',
+        notes:
+          typeof rawCtrl?.updateInfo?.notes === 'string' ? rawCtrl.updateInfo.notes.slice(0, 500) : '',
+        publishedAt:
+          typeof rawCtrl?.updateInfo?.publishedAt === 'number' ? rawCtrl.updateInfo.publishedAt : 0,
+      },
+    };
     return {
       adminPasswordHash: typeof parsed.adminPasswordHash === 'string' ? parsed.adminPasswordHash : undefined,
       webhookSecretHash: typeof parsed.webhookSecretHash === 'string' ? parsed.webhookSecretHash : undefined,
@@ -121,6 +207,8 @@ function loadStore(): StoreState {
       orders: parsed.orders && typeof parsed.orders === 'object' ? parsed.orders : {},
       licenses: parsed.licenses && typeof parsed.licenses === 'object' ? parsed.licenses : {},
       usedUtrs: parsed.usedUtrs && typeof parsed.usedUtrs === 'object' ? parsed.usedUtrs : {},
+      devices: parsed.devices && typeof parsed.devices === 'object' ? parsed.devices : {},
+      appControl,
     };
   } catch {
     return createDefaultStore();
@@ -397,6 +485,72 @@ async function syncDeviceToGitHub(deviceId: string, expiryMs: number, label: str
   }
 }
 
+const GITHUB_UPDATE_PATH = 'update.txt';
+const GITHUB_UPDATE_MARKER = '#BIPIN-UPDATE';
+
+function buildUpdateTxtContent(ctrl: AppControlConfig): string {
+  const lines = [
+    GITHUB_UPDATE_MARKER,
+    `VERSION_CODE=${ctrl.updateInfo.versionCode}`,
+    `VERSION_NAME=${ctrl.updateInfo.versionName || String(ctrl.updateInfo.versionCode)}`,
+    `MIN_VERSION=${ctrl.updateInfo.minVersionCode}`,
+    `URL=${ctrl.updateInfo.downloadUrl}`,
+    `NOTES=${ctrl.updateInfo.notes.replace(/\r?\n/g, ' | ').trim()}`,
+    `KILL_SWITCH=${ctrl.globalKillSwitch ? 'true' : 'false'}`,
+    `KILL_MODE=${ctrl.killMode}`,
+    `KILL_MESSAGE=${ctrl.globalKillMessage.replace(/\r?\n/g, ' ').trim()}`,
+    `BROADCAST=${ctrl.broadcastMessage.replace(/\r?\n/g, ' ').trim()}`,
+  ];
+  return lines.join('\n') + '\n';
+}
+
+async function syncUpdateTxtToGitHub(ctrl: AppControlConfig): Promise<{ ok: boolean; error?: string }> {
+  const token = (process.env.GITHUB_LICENSE_TOKEN || '').trim();
+  if (!token) {
+    return { ok: false, error: 'GITHUB_LICENSE_TOKEN server secrets me set nahi hai' };
+  }
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_UPDATE_PATH}`;
+  try {
+    let sha: string | undefined;
+    const getResp = await fetch(apiUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'SwiftGate-Server',
+      },
+    });
+    if (getResp.ok) {
+      const fileData = (await getResp.json()) as { sha?: string };
+      sha = fileData.sha;
+    } else if (getResp.status !== 404) {
+      return { ok: false, error: `GitHub read error ${getResp.status}` };
+    }
+
+    const contentStr = buildUpdateTxtContent(ctrl);
+    const putResp = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'SwiftGate-Server',
+      },
+      body: JSON.stringify({
+        message: `Update app control (v${ctrl.updateInfo.versionName}, kill=${ctrl.globalKillSwitch})`,
+        content: Buffer.from(contentStr, 'utf8').toString('base64'),
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    if (!putResp.ok) {
+      const errText = await putResp.text().catch(() => '');
+      return { ok: false, error: `GitHub push failed (${putResp.status}): ${errText.slice(0, 120)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'GitHub network error' };
+  }
+}
+
 async function approveOrderPayment(order: PaymentOrder, utr: string, verifiedBy: string): Promise<LicenseRecord> {
   if (order.status === 'PAID') {
     const existing = store.licenses[order.deviceId];
@@ -601,14 +755,151 @@ async function startServer(): Promise<void> {
       return;
     }
     const rec = store.licenses[deviceId];
+    const dev = store.devices[deviceId];
     const now = Date.now();
-    const active = Boolean(rec && (rec.isUnlimited || rec.expiryMs > now));
+    const killed = Boolean(store.appControl.globalKillSwitch || dev?.remoteKilled);
+    const active = !killed && Boolean(rec && (rec.isUnlimited || rec.expiryMs > now));
     res.json({
       deviceId,
       active,
+      killed,
+      killMode: store.appControl.killMode,
+      killMessage: dev?.remoteKilled
+        ? dev.killMessage || store.appControl.globalKillMessage
+        : store.appControl.globalKillSwitch
+          ? store.appControl.globalKillMessage
+          : '',
+      broadcastMessage: store.appControl.broadcastMessage,
       expiryMs: rec ? rec.expiryMs : 0,
       isUnlimited: Boolean(rec?.isUnlimited),
       planName: rec?.planName || '',
+      serverTimeMs: now,
+    });
+  });
+
+  app.get('/api/public/app-control', (req: Request, res: Response) => {
+    const rawId = String(req.query.deviceId || '').trim().toUpperCase();
+    const dev = DEVICE_ID_RE.test(rawId) ? store.devices[rawId] : undefined;
+    const ctrl = store.appControl;
+    const killed = Boolean(ctrl.globalKillSwitch || dev?.remoteKilled);
+    res.json({
+      killed,
+      globalKillSwitch: ctrl.globalKillSwitch,
+      deviceKilled: Boolean(dev?.remoteKilled),
+      killMode: ctrl.killMode,
+      killMessage: dev?.remoteKilled
+        ? dev.killMessage || ctrl.globalKillMessage
+        : ctrl.globalKillSwitch
+          ? ctrl.globalKillMessage
+          : '',
+      broadcastMessage: ctrl.broadcastMessage,
+      update: {
+        code: ctrl.updateInfo.versionCode,
+        name: ctrl.updateInfo.versionName,
+        minCode: ctrl.updateInfo.minVersionCode,
+        url: ctrl.updateInfo.downloadUrl,
+        notes: ctrl.updateInfo.notes
+          .split('|')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        publishedAt: ctrl.updateInfo.publishedAt,
+      },
+      serverTimeMs: Date.now(),
+    });
+  });
+
+  app.post('/api/device/heartbeat', (req: Request, res: Response) => {
+    const clientIp = req.ip || 'unknown';
+    if (!checkRateLimit(`hb:${clientIp}`, 60, 60 * 1000)) {
+      res.status(429).json({ error: 'Rate limit exceeded' });
+      return;
+    }
+    const body = (req.body || {}) as {
+      deviceId?: unknown;
+      appVersionCode?: unknown;
+      appVersionName?: unknown;
+      deviceModel?: unknown;
+      manufacturer?: unknown;
+      androidVersion?: unknown;
+      accessibilityOn?: unknown;
+      isRunning?: unknown;
+      ordersAcceptedCount?: unknown;
+    };
+    const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim().toUpperCase() : '';
+    if (!DEVICE_ID_RE.test(deviceId)) {
+      res.status(400).json({ error: 'Valid Device ID required' });
+      return;
+    }
+    const now = Date.now();
+    const prev = store.devices[deviceId];
+    const appVersionCode = Number(body.appVersionCode);
+    const ordersAcceptedCount = Number(body.ordersAcceptedCount);
+
+    const nextRec: InstalledDeviceRecord = {
+      deviceId,
+      appVersionCode:
+        Number.isFinite(appVersionCode) && appVersionCode >= 0 && appVersionCode <= 99999
+          ? Math.round(appVersionCode)
+          : prev?.appVersionCode ?? 3,
+      appVersionName:
+        typeof body.appVersionName === 'string' && body.appVersionName.trim()
+          ? body.appVersionName.trim().slice(0, 24)
+          : prev?.appVersionName ?? '1.3',
+      deviceModel:
+        typeof body.deviceModel === 'string' && body.deviceModel.trim()
+          ? body.deviceModel.trim().slice(0, 64)
+          : prev?.deviceModel ?? 'Android Device',
+      manufacturer:
+        typeof body.manufacturer === 'string' && body.manufacturer.trim()
+          ? body.manufacturer.trim().slice(0, 40)
+          : prev?.manufacturer ?? '',
+      androidVersion:
+        typeof body.androidVersion === 'string' && body.androidVersion.trim()
+          ? body.androidVersion.trim().slice(0, 24)
+          : prev?.androidVersion ?? '',
+      accessibilityOn: Boolean(body.accessibilityOn),
+      isRunning: Boolean(body.isRunning),
+      ordersAcceptedCount:
+        Number.isFinite(ordersAcceptedCount) && ordersAcceptedCount >= 0 && ordersAcceptedCount <= 10_000_000
+          ? Math.max(prev?.ordersAcceptedCount ?? 0, Math.round(ordersAcceptedCount))
+          : prev?.ordersAcceptedCount ?? 0,
+      firstSeenAt: prev?.firstSeenAt ?? now,
+      lastSeenAt: now,
+      remoteKilled: prev?.remoteKilled ?? false,
+      killMessage: prev?.killMessage,
+    };
+
+    store.devices[deviceId] = nextRec;
+    saveStore();
+
+    const lic = store.licenses[deviceId];
+    const ctrl = store.appControl;
+    const killed = Boolean(ctrl.globalKillSwitch || nextRec.remoteKilled);
+    const licenseActive = !killed && Boolean(lic && (lic.isUnlimited || lic.expiryMs > now));
+
+    res.json({
+      ok: true,
+      killed,
+      killMode: ctrl.killMode,
+      killMessage: nextRec.remoteKilled
+        ? nextRec.killMessage || ctrl.globalKillMessage
+        : ctrl.globalKillSwitch
+          ? ctrl.globalKillMessage
+          : '',
+      broadcastMessage: ctrl.broadcastMessage,
+      licenseActive,
+      expiryMs: lic ? lic.expiryMs : 0,
+      isUnlimited: Boolean(lic?.isUnlimited),
+      update: {
+        code: ctrl.updateInfo.versionCode,
+        name: ctrl.updateInfo.versionName,
+        minCode: ctrl.updateInfo.minVersionCode,
+        url: ctrl.updateInfo.downloadUrl,
+        notes: ctrl.updateInfo.notes
+          .split('|')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      },
       serverTimeMs: now,
     });
   });
@@ -945,15 +1236,89 @@ async function startServer(): Promise<void> {
   });
 
   app.get('/api/admin/dashboard', requireAdminAuth, (_req: Request, res: Response) => {
+    const now = Date.now();
     const orders = Object.values(store.orders)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 40);
     const licenses = Object.values(store.licenses).sort((a, b) => b.updatedAt - a.updatedAt);
+
+    // Merge devices with known licenses so approved-but-not-yet-pinged devices also appear
+    const deviceMap = new Map<string, InstalledDeviceRecord>();
+    for (const dev of Object.values(store.devices)) {
+      deviceMap.set(dev.deviceId, dev);
+    }
+    for (const lic of licenses) {
+      if (!deviceMap.has(lic.deviceId)) {
+        deviceMap.set(lic.deviceId, {
+          deviceId: lic.deviceId,
+          appVersionCode: 0,
+          appVersionName: '-',
+          deviceModel: 'Approved Device',
+          manufacturer: '',
+          androidVersion: '',
+          accessibilityOn: false,
+          isRunning: false,
+          ordersAcceptedCount: 0,
+          firstSeenAt: lic.updatedAt,
+          lastSeenAt: 0,
+          remoteKilled: false,
+        });
+      }
+    }
+
+    const devices = Array.from(deviceMap.values())
+      .map((d) => {
+        const lic = store.licenses[d.deviceId];
+        const licActive = Boolean(lic && (lic.isUnlimited || lic.expiryMs > now));
+        return {
+          ...d,
+          onlineNow: d.lastSeenAt > 0 && now - d.lastSeenAt <= 5 * 60 * 1000,
+          activeToday: d.lastSeenAt > 0 && now - d.lastSeenAt <= 24 * 60 * 60 * 1000,
+          licenseActive: licActive,
+          licensePlan: lic?.planName || '',
+          licenseExpiryMs: lic?.expiryMs || 0,
+          isUnlimited: Boolean(lic?.isUnlimited),
+        };
+      })
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt || b.firstSeenAt - a.firstSeenAt);
+
+    const versionBreakdown: Record<string, number> = {};
+    let onlineNow = 0;
+    let active24h = 0;
+    let runningAutoAccept = 0;
+    let killedCount = 0;
+    let totalOrdersAccepted = 0;
+    for (const d of devices) {
+      if (d.onlineNow) onlineNow++;
+      if (d.activeToday) active24h++;
+      if (d.onlineNow && d.isRunning) runningAutoAccept++;
+      if (d.remoteKilled) killedCount++;
+      totalOrdersAccepted += d.ordersAcceptedCount;
+      if (d.appVersionName && d.appVersionName !== '-') {
+        const vKey = `v${d.appVersionName}`;
+        versionBreakdown[vKey] = (versionBreakdown[vKey] || 0) + 1;
+      }
+    }
+
     res.json({
       config: store.config,
       plans: store.plans,
       orders,
       licenses,
+      devices,
+      stats: {
+        totalInstalled: Object.keys(store.devices).length,
+        totalKnown: devices.length,
+        onlineNow,
+        active24h,
+        runningAutoAccept,
+        licensedCount: licenses.filter((l) => l.isUnlimited || l.expiryMs > now).length,
+        killedCount,
+        totalOrdersAccepted,
+        versionBreakdown,
+      },
+      appControl: store.appControl,
+      updateTxtContent: buildUpdateTxtContent(store.appControl),
       integrations: {
         razorpayConfigured: Boolean(getRazorpayCreds()),
         razorpayWebhookConfigured: Boolean((process.env.RAZORPAY_WEBHOOK_SECRET || '').trim()),
@@ -961,7 +1326,7 @@ async function startServer(): Promise<void> {
         merchantWebhookKeySet: Boolean(store.webhookSecretHash),
         githubTokenConfigured: Boolean((process.env.GITHUB_LICENSE_TOKEN || '').trim()),
       },
-      serverTimeMs: Date.now(),
+      serverTimeMs: now,
     });
   });
 
@@ -1139,6 +1504,124 @@ async function startServer(): Promise<void> {
     delete store.licenses[deviceId];
     saveStore();
     res.json({ ok: true });
+  });
+
+  app.post('/api/admin/devices/:deviceId/kill', requireAdminAuth, (req: Request, res: Response) => {
+    const deviceId = String(req.params.deviceId || '').trim().toUpperCase();
+    if (!DEVICE_ID_RE.test(deviceId)) {
+      res.status(400).json({ error: 'Invalid Device ID' });
+      return;
+    }
+    const body = (req.body || {}) as { killed?: unknown; killMessage?: unknown };
+    const killed = Boolean(body.killed);
+    const killMessage =
+      typeof body.killMessage === 'string' ? body.killMessage.trim().slice(0, 240) : '';
+    const existing = store.devices[deviceId] || {
+      deviceId,
+      appVersionCode: 0,
+      appVersionName: '-',
+      deviceModel: 'Unknown Device',
+      manufacturer: '',
+      androidVersion: '',
+      accessibilityOn: false,
+      isRunning: false,
+      ordersAcceptedCount: 0,
+      firstSeenAt: Date.now(),
+      lastSeenAt: 0,
+      remoteKilled: false,
+    };
+    existing.remoteKilled = killed;
+    existing.killMessage = killMessage || undefined;
+    store.devices[deviceId] = existing;
+    saveStore();
+    res.json({ ok: true, device: existing });
+  });
+
+  app.delete('/api/admin/devices/:deviceId', requireAdminAuth, (req: Request, res: Response) => {
+    const deviceId = String(req.params.deviceId || '').trim().toUpperCase();
+    if (!DEVICE_ID_RE.test(deviceId)) {
+      res.status(400).json({ error: 'Invalid Device ID' });
+      return;
+    }
+    delete store.devices[deviceId];
+    saveStore();
+    res.json({ ok: true });
+  });
+
+  app.put('/api/admin/app-control', requireAdminAuth, async (req: Request, res: Response) => {
+    const body = (req.body || {}) as {
+      globalKillSwitch?: unknown;
+      killMode?: unknown;
+      globalKillMessage?: unknown;
+      broadcastMessage?: unknown;
+      pushToGitHub?: unknown;
+      updateInfo?: {
+        versionCode?: unknown;
+        versionName?: unknown;
+        minVersionCode?: unknown;
+        downloadUrl?: unknown;
+        notes?: unknown;
+      };
+    };
+
+    const ctrl = store.appControl;
+    if (typeof body.globalKillSwitch === 'boolean') {
+      ctrl.globalKillSwitch = body.globalKillSwitch;
+    }
+    if (body.killMode === 'crash' || body.killMode === 'lock') {
+      ctrl.killMode = body.killMode;
+    }
+    if (typeof body.globalKillMessage === 'string') {
+      const cleanMsg = body.globalKillMessage.trim().slice(0, 240);
+      ctrl.globalKillMessage = cleanMsg || 'App abhi Owner dwara temporarily band kiya gaya hai.';
+    }
+    if (typeof body.broadcastMessage === 'string') {
+      ctrl.broadcastMessage = body.broadcastMessage.trim().slice(0, 240);
+    }
+
+    if (body.updateInfo && typeof body.updateInfo === 'object') {
+      const u = body.updateInfo;
+      const vCode = Number(u.versionCode);
+      const minCode = Number(u.minVersionCode);
+      const vName = typeof u.versionName === 'string' ? u.versionName.trim().slice(0, 24) : '';
+      const urlRaw = typeof u.downloadUrl === 'string' ? u.downloadUrl.trim() : '';
+      const notesRaw = typeof u.notes === 'string' ? u.notes.trim().slice(0, 500) : '';
+
+      if (urlRaw && !isSafeHttpsUrl(urlRaw)) {
+        res.status(400).json({ error: 'Update URL https:// se shuru hona chahiye' });
+        return;
+      }
+      if (Number.isFinite(vCode) && vCode >= 1 && vCode <= 99999) {
+        ctrl.updateInfo.versionCode = Math.round(vCode);
+      }
+      if (vName) {
+        ctrl.updateInfo.versionName = vName;
+      }
+      if (Number.isFinite(minCode) && minCode >= 0 && minCode <= 99999) {
+        ctrl.updateInfo.minVersionCode = Math.round(minCode);
+      }
+      ctrl.updateInfo.downloadUrl = urlRaw;
+      ctrl.updateInfo.notes = notesRaw;
+      ctrl.updateInfo.publishedAt = Date.now();
+    }
+
+    saveStore();
+
+    let githubPushed = false;
+    let githubError: string | undefined;
+    if (body.pushToGitHub === true) {
+      const ghRes = await syncUpdateTxtToGitHub(ctrl);
+      githubPushed = ghRes.ok;
+      githubError = ghRes.error;
+    }
+
+    res.json({
+      ok: true,
+      appControl: ctrl,
+      updateTxtContent: buildUpdateTxtContent(ctrl),
+      githubPushed,
+      githubError,
+    });
   });
 
   // ---------- Frontend Hosting (Vite dev or built dist) ----------

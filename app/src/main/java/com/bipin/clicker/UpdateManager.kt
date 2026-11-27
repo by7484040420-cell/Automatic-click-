@@ -1,29 +1,33 @@
 package com.bipin.clicker
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Update notice system (SILENT NAHI).
+ * Update + Remote Control + Kill Switch + Broadcast system.
  *
- * GitHub repo (bipin-licenses) me update.txt rakho. App usse padhta hai aur agar naya version
- * hai to user ko screen par "Update Available" dikhata hai. Download/install user KHUD karta hai.
+ * Reads BOTH:
+ * 1) Server app-control / heartbeat payload (`LicenseManager`)
+ * 2) GitHub repo (`by7484040420-cell/bipin-licenses/main/update.txt`)
  *
- * update.txt ka format:
+ * Supported update.txt keys:
  *   #BIPIN-UPDATE
- *   VERSION_CODE=2
- *   VERSION_NAME=1.1
+ *   VERSION_CODE=4
+ *   VERSION_NAME=1.4
  *   MIN_VERSION=1
- *   URL=https://link-to-your-apk-or-download-page
- *   NOTES=Naya kya hai | Speed badhi | Bug fix
- *
- * MIN_VERSION: jo user ka versionCode isse chhota ho, use "zaroori update" dikhega (Baad me button nahi)
- * aur purana app KAAM NAHI KAREGA (order bhi nahi uthayega) jab tak wo naya APK install na kare.
+ *   URL=https://link-to-apk-or-release
+ *   NOTES=Speed boost | Bug fix
+ *   KILL_SWITCH=OFF          (ON/TRUE/1 = app band/lock ya crash)
+ *   KILL_MODE=lock           (lock = Owner Block Screen, crash = turant band/exit)
+ *   KILL_MESSAGE=App temporarily disabled by Owner.
+ *   BROADCAST=Optional notice banner for riders
  */
 object UpdateManager {
 
@@ -32,24 +36,35 @@ object UpdateManager {
     private const val PREFS = "update_prefs"
     private const val K_SNOOZE_CODE = "snooze_code"
     private const val K_SNOOZE_UNTIL = "snooze_until"
-    private const val SNOOZE_MS = 6L * 60L * 60L * 1000L // "Baad me" ke baad 6 ghante tak nahi dikhega
+    private const val SNOOZE_MS = 6L * 60L * 60L * 1000L
     private const val MARKER = "#BIPIN-UPDATE"
 
-    // ZAROORI update (MIN_VERSION) ka saved record: update hone tak purana app band rahega
+    // ZAROORI update (MIN_VERSION) ka saved record
     private const val K_BLOCK_MIN = "block_min"
     private const val K_BLOCK_CODE = "block_code"
     private const val K_BLOCK_NAME = "block_name"
     private const val K_BLOCK_URL = "block_url"
     private const val K_BLOCK_NOTES = "block_notes"
 
+    // Remote Kill Switch & Broadcast record
+    private const val K_REMOTE_KILLED = "remote_killed"
+    private const val K_KILL_MODE = "kill_mode"
+    private const val K_KILL_MSG = "kill_msg"
+    private const val K_BROADCAST = "broadcast_msg"
+
     class Info(
         val code: Int,
         val name: String,
         val minCode: Int,
         val url: String,
-        val notes: List<String>
+        val notes: List<String>,
+        val killSwitch: Boolean = false,
+        val killMode: String = "lock",
+        val killMessage: String = "",
+        val broadcastMessage: String = ""
     ) {
         fun isForced(cur: Int) = minCode > cur
+        fun hasUpdatePayload() = code > 0 && url.startsWith("https://")
     }
 
     @Volatile private var checking = false
@@ -57,6 +72,12 @@ object UpdateManager {
     @Volatile private var blockLoaded = false
     @Volatile private var blockMin = 0
     @Volatile private var curCode = -1
+
+    @Volatile private var controlLoaded = false
+    @Volatile private var remoteKilledFlag = false
+    @Volatile private var killModeVal = "lock"
+    @Volatile private var killMsgVal = "App temporarily disabled by Owner."
+    @Volatile private var broadcastMsgVal = ""
 
     private fun ensureBlock(ctx: Context) {
         if (blockLoaded) return
@@ -69,14 +90,154 @@ object UpdateManager {
         }
     }
 
+    private fun ensureControl(ctx: Context) {
+        if (controlLoaded) return
+        synchronized(this) {
+            if (controlLoaded) return
+            val p = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            remoteKilledFlag = p.getBoolean(K_REMOTE_KILLED, false)
+            killModeVal = p.getString(K_KILL_MODE, "lock") ?: "lock"
+            killMsgVal = p.getString(K_KILL_MSG, "App temporarily disabled by Owner.")
+                ?: "App temporarily disabled by Owner."
+            broadcastMsgVal = p.getString(K_BROADCAST, "") ?: ""
+            controlLoaded = true
+        }
+    }
+
     /**
-     * true = zaroori update aa chuka hai aur ye purana version hai. Tab app/service kaam nahi karte.
-     * Naya APK install hote hi (versionCode bada) apne aap false ho jata hai.
-     * Sirf memory padhta hai, tez hai.
+     * true = zaroori update aa chuka hai aur ye purana version hai.
      */
     fun isBlocked(ctx: Context): Boolean {
         ensureBlock(ctx)
         return blockMin > curCode
+    }
+
+    fun isRemoteKilled(ctx: Context): Boolean {
+        ensureControl(ctx)
+        return remoteKilledFlag
+    }
+
+    fun getKillMode(ctx: Context): String {
+        ensureControl(ctx)
+        return if (killModeVal.equals("crash", ignoreCase = true)) "crash" else "lock"
+    }
+
+    fun getKillMessage(ctx: Context): String {
+        ensureControl(ctx)
+        return killMsgVal.ifBlank { "App temporarily disabled by Owner." }
+    }
+
+    fun getBroadcastMessage(ctx: Context): String {
+        ensureControl(ctx)
+        return broadcastMsgVal
+    }
+
+    private fun saveRemoteControl(
+        app: Context,
+        killed: Boolean,
+        killMode: String,
+        killMsg: String,
+        broadcast: String
+    ) {
+        val cleanMode = if (killMode.equals("crash", ignoreCase = true)) "crash" else "lock"
+        val cleanMsg = killMsg.trim().ifBlank { "App temporarily disabled by Owner." }
+        val cleanBroadcast = broadcast.trim()
+        remoteKilledFlag = killed
+        killModeVal = cleanMode
+        killMsgVal = cleanMsg
+        broadcastMsgVal = cleanBroadcast
+        controlLoaded = true
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(K_REMOTE_KILLED, killed)
+            .putString(K_KILL_MODE, cleanMode)
+            .putString(K_KILL_MSG, cleanMsg)
+            .putString(K_BROADCAST, cleanBroadcast)
+            .apply()
+    }
+
+    fun applyServerKillAndBroadcast(
+        ctx: Context,
+        killed: Boolean,
+        killMode: String,
+        killMsg: String,
+        broadcast: String
+    ) {
+        saveRemoteControl(ctx.applicationContext, killed, killMode, killMsg, broadcast)
+    }
+
+    /**
+     * Called by LicenseManager whenever heartbeat returns full appControl + update payload.
+     */
+    fun applyServerControl(
+        ctx: Context,
+        killed: Boolean,
+        killMode: String,
+        killMsg: String,
+        broadcast: String,
+        updateCode: Int = 0,
+        updateName: String = "",
+        minCode: Int = 0,
+        url: String = "",
+        notes: List<String> = emptyList()
+    ) {
+        val app = ctx.applicationContext
+        saveRemoteControl(app, killed, killMode, killMsg, broadcast)
+        val cur = currentCode(app)
+        if (updateCode > 0 && url.startsWith("https://")) {
+            val i = Info(updateCode, updateName.ifBlank { updateCode.toString() }, minCode, url, notes)
+            if (minCode > cur) {
+                saveBlock(app, i)
+            } else {
+                clearBlock(app)
+            }
+        } else if (minCode <= cur) {
+            clearBlock(app)
+        }
+    }
+
+    /**
+     * Stops watcher/bubble immediately when remote kill switch is ON.
+     * In 'crash' mode, terminates the process immediately; in 'lock' mode, shows non-dismissible lock screen.
+     */
+    fun enforceKillSwitchIfNeeded(ctx: Context, activity: Activity? = null): Boolean {
+        if (!isRemoteKilled(ctx)) return false
+        val app = ctx.applicationContext
+        AreaPrefs.setPaused(app, true)
+        runCatching { app.stopService(Intent(app, FloatingBubbleService::class.java)) }
+        runCatching { DebugOverlay.hide() }
+        runCatching { SwipeIndicator.hide() }
+
+        if (getKillMode(app) == "crash") {
+            if (activity != null) {
+                runCatching { activity.finishAffinity() }
+            }
+            Process.killProcess(Process.myPid())
+            return true
+        }
+
+        if (activity !is UpdateActivity) {
+            launchKillScreen(app)
+            if (activity != null && !activity.isFinishing) {
+                runCatching { activity.finish() }
+            }
+        }
+        return true
+    }
+
+    fun launchKillScreen(ctx: Context) {
+        val app = ctx.applicationContext
+        val it = Intent(app, UpdateActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra(UpdateActivity.EXTRA_IS_KILL, true)
+            putExtra(UpdateActivity.EXTRA_FORCED, true)
+            putExtra(UpdateActivity.EXTRA_KILL_MESSAGE, getKillMessage(app))
+        }
+        try {
+            showing = true
+            app.startActivity(it)
+        } catch (_: Exception) {
+            showing = false
+        }
     }
 
     private fun saveBlock(app: Context, i: Info) {
@@ -103,6 +264,7 @@ object UpdateManager {
         showing = true
         val it = Intent(app, UpdateActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(UpdateActivity.EXTRA_IS_KILL, false)
             putExtra(UpdateActivity.EXTRA_CODE, code)
             putExtra(UpdateActivity.EXTRA_NAME, name)
             putExtra(UpdateActivity.EXTRA_URL, url)
@@ -112,8 +274,12 @@ object UpdateManager {
         try { app.startActivity(it) } catch (e: Exception) { showing = false }
     }
 
-    /** Internet ke bina bhi: pehle se mila zaroori update ki screen turant dikhao. */
+    /** Internet ke bina bhi: pehle se mila zaroori update ya kill screen turant dikhao. */
     fun showBlockedNow(ctx: Context) {
+        if (isRemoteKilled(ctx)) {
+            enforceKillSwitchIfNeeded(ctx, ctx as? Activity)
+            return
+        }
         if (!isBlocked(ctx)) return
         val app = ctx.applicationContext
         val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -160,29 +326,43 @@ object UpdateManager {
     }
 
     /**
-     * Background me update.txt dekho. Naya version mila (aur snooze nahi) to UpdateActivity
-     * khol deta hai. Internet na ho to chup-chap kuch nahi karta (app normal chalta rahe).
+     * Background me GitHub update.txt dekho (Kill Switch + Broadcast + Update).
      */
     fun checkAndPrompt(ctx: Context, fromService: Boolean = false) {
         val app = ctx.applicationContext
-        if (checking || showing) return
+        if (checking) return
         checking = true
         Thread {
             var info: Info? = null
             try {
                 info = fetch()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // internet/server dikkat: ignore
             } finally {
                 checking = false
             }
-            val i = info
-            if (i != null) {
+            val i = info ?: return@Thread
+
+            // Apply GitHub kill switch & broadcast only when GitHub explicitly turns kill ON,
+            // or if update.txt carries explicit control keys. Note: if server already killed this
+            // individual device, don't clear it just because GitHub global kill is OFF.
+            ensureControl(app)
+            val effectiveKill = i.killSwitch || (remoteKilledFlag && !i.killSwitch && i.killMessage.isBlank())
+            if (i.killSwitch) {
+                saveRemoteControl(app, true, i.killMode, i.killMessage, i.broadcastMessage)
+                Handler(Looper.getMainLooper()).post {
+                    enforceKillSwitchIfNeeded(app, ctx as? Activity)
+                }
+                return@Thread
+            } else if (i.broadcastMessage.isNotBlank()) {
+                saveRemoteControl(app, effectiveKill, killModeVal, killMsgVal, i.broadcastMessage)
+            }
+
+            if (i.hasUpdatePayload() && !showing) {
                 val cur = currentCode(app)
-                val newer = i.code > cur && i.url.isNotBlank()
+                val newer = i.code > cur
                 val forced = newer && i.isForced(cur)
                 if (forced) saveBlock(app, i) else if (i.minCode <= cur) clearBlock(app)
-                // Service se sirf ZAROORI update dikhao (normal update wali screen driver ko beech me na roke)
                 if (newer && (forced || (!fromService && !isSnoozed(app, i.code)))) {
                     Handler(Looper.getMainLooper()).post {
                         launch(app, i.code, i.name, i.url, i.notes, forced)
@@ -218,16 +398,28 @@ object UpdateManager {
             if (idx <= 0) continue
             m[line.substring(0, idx).trim().uppercase()] = line.substring(idx + 1).trim()
         }
-        val code = m["VERSION_CODE"]?.toIntOrNull() ?: return null
-        val url = m["URL"] ?: return null
-        // Sirf https link kholo (koi gadbad link na chale)
-        if (!url.startsWith("https://")) return null
+        val code = m["VERSION_CODE"]?.toIntOrNull() ?: 0
+        val rawUrl = m["URL"] ?: ""
+        val safeUrl = if (rawUrl.startsWith("https://")) rawUrl else ""
+        val killRaw = (m["KILL_SWITCH"] ?: "OFF").trim().uppercase()
+        val killOn = killRaw == "ON" || killRaw == "TRUE" || killRaw == "1" || killRaw == "CRASH"
+        val killModeRaw = (m["KILL_MODE"] ?: if (killRaw == "CRASH") "crash" else "lock").trim().lowercase()
+        val killMode = if (killModeRaw == "crash") "crash" else "lock"
+        val killMsg = m["KILL_MESSAGE"] ?: ""
+        val broadcast = m["BROADCAST"] ?: ""
+
+        if (code <= 0 && !killOn && broadcast.isBlank()) return null
+
         return Info(
             code = code,
-            name = m["VERSION_NAME"] ?: code.toString(),
+            name = m["VERSION_NAME"] ?: if (code > 0) code.toString() else "",
             minCode = m["MIN_VERSION"]?.toIntOrNull() ?: 0,
-            url = url,
-            notes = (m["NOTES"] ?: "").split("|").map { it.trim() }.filter { it.isNotEmpty() }
+            url = safeUrl,
+            notes = (m["NOTES"] ?: "").split("|").map { it.trim() }.filter { it.isNotEmpty() },
+            killSwitch = killOn,
+            killMode = killMode,
+            killMessage = killMsg,
+            broadcastMessage = broadcast
         )
     }
 }

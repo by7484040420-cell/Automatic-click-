@@ -67,12 +67,46 @@ class OrderWatcherService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    // APPROVAL: har 5 minute me server + GitHub se approval/time check (rate-limit safe)
+    // APPROVAL + FLEET HEARTBEAT + KILL SWITCH: har 3 minute me server + GitHub check
     private val licenseRunnable = object : Runnable {
         override fun run() {
-            LicenseManager.refreshAsync(applicationContext)
-            UpdateManager.checkAndPrompt(applicationContext, fromService = true)
-            handler.postDelayed(this, 300_000L)
+            val app = applicationContext
+            val runningNow = PermissionManager.isEverythingReady(app) &&
+                !AreaPrefs.isPaused(app) &&
+                !UpdateManager.isRemoteKilled(app)
+            LicenseManager.sendHeartbeatAsync(
+                ctx = app,
+                isRunning = runningNow,
+                accessibilityOn = true,
+                ordersAccepted = AreaPrefs.getOrdersAcceptedCount(app)
+            ) {
+                if (UpdateManager.isRemoteKilled(app)) {
+                    stopServiceOnRemoteKill()
+                }
+            }
+            LicenseManager.refreshAsync(app) {
+                if (UpdateManager.isRemoteKilled(app)) {
+                    stopServiceOnRemoteKill()
+                }
+            }
+            UpdateManager.checkAndPrompt(app, fromService = true)
+            handler.postDelayed(this, 180_000L)
+        }
+    }
+
+    private fun stopServiceOnRemoteKill() {
+        val app = applicationContext
+        AreaPrefs.setPaused(app, true)
+        verifyAttemptsLeft = 0
+        setStatus("KILLED BY OWNER")
+        runCatching { app.stopService(Intent(app, FloatingBubbleService::class.java)) }
+        runCatching { DebugOverlay.hide() }
+        runCatching { SwipeIndicator.hide() }
+        if (UpdateManager.getKillMode(app) == "crash") {
+            runCatching { disableSelf() }
+            android.os.Process.killProcess(android.os.Process.myPid())
+        } else {
+            UpdateManager.launchKillScreen(app)
         }
     }
     private var retryUntil = 0L
@@ -187,6 +221,10 @@ class OrderWatcherService : AccessibilityService() {
             return
         }
         if (AreaPrefs.isPaused(applicationContext)) return
+        if (UpdateManager.isRemoteKilled(applicationContext)) {
+            stopServiceOnRemoteKill()
+            return
+        }
         if (!LicenseManager.isActive(applicationContext)) return
 
         when (event.eventType) {
@@ -219,6 +257,10 @@ class OrderWatcherService : AccessibilityService() {
 
     private fun scanNow(forceImmediate: Boolean = false) {
         if (LicenseManager.isOwnUiOpening() && isOwnAppInForeground()) return
+        if (UpdateManager.isRemoteKilled(applicationContext)) {
+            stopServiceOnRemoteKill()
+            return
+        }
         if (!LicenseManager.isActive(applicationContext)) return
         if (!PermissionManager.isEverythingReady(applicationContext)) return
         if (AreaPrefs.isPaused(applicationContext)) return
@@ -659,6 +701,10 @@ class OrderWatcherService : AccessibilityService() {
             scheduleNextOcr(350L)
             return
         }
+        if (UpdateManager.isRemoteKilled(applicationContext)) {
+            stopServiceOnRemoteKill()
+            return
+        }
         if (!LicenseManager.isActive(applicationContext) ||
             !PermissionManager.isEverythingReady(applicationContext) ||
             AreaPrefs.isPaused(applicationContext)
@@ -1035,7 +1081,10 @@ class OrderWatcherService : AccessibilityService() {
             slideInFlightUntil = SystemClock.uptimeMillis() + 2L
             lastSwipeResult = "$tag ${if (ok) "DONE" else what}"
             reportDebug("SWIPE $lastSwipeResult ${SystemClock.uptimeMillis() - t0}ms\n$info")
-            if (ok) SoundPlayer.playOrderSound(applicationContext)
+            if (ok) {
+                AreaPrefs.incrementOrdersAcceptedCount(applicationContext)
+                SoundPlayer.playOrderSound(applicationContext)
+            }
         }
 
         fun single(durationMs: Long, toX: Float): Boolean {

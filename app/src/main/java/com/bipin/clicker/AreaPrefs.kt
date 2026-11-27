@@ -29,6 +29,7 @@ object AreaPrefs {
     private const val KEY_MAX_PICKUP_KM = "max_pickup_km"
     private const val KEY_ALLOW_MISSING_KM = "allow_pickup_when_km_missing"
     private const val KEY_BUBBLE_MANUAL_OFF = "bubble_manually_off"
+    private const val KEY_ORDERS_ACCEPTED_COUNT = "orders_accepted_count"
 
     // v13 SPEED: selections + pause state memory me cache hain (0ms lookup)
     @Volatile private var isPausedCache: Boolean? = null
@@ -39,6 +40,7 @@ object AreaPrefs {
     @Volatile private var pickupKeywordsCache: List<String>? = null
     @Volatile private var maxPickupKmCache: Float? = null
     @Volatile private var allowMissingKmCache: Boolean? = null
+    @Volatile private var ordersAcceptedCache: Int? = null
 
     private fun copySelections(src: Map<String, Set<String>>): Map<String, Set<String>> {
         val out = LinkedHashMap<String, Set<String>>()
@@ -62,6 +64,17 @@ object AreaPrefs {
 
     fun isBubbleManuallyOff(context: Context): Boolean =
         prefs(context).getBoolean(KEY_BUBBLE_MANUAL_OFF, false)
+
+    fun getOrdersAcceptedCount(context: Context): Int =
+        ordersAcceptedCache ?: prefs(context).getInt(KEY_ORDERS_ACCEPTED_COUNT, 0)
+            .also { ordersAcceptedCache = it }
+
+    fun incrementOrdersAcceptedCount(context: Context): Int {
+        val next = getOrdersAcceptedCount(context) + 1
+        ordersAcceptedCache = next
+        prefs(context).edit().putInt(KEY_ORDERS_ACCEPTED_COUNT, next).apply()
+        return next
+    }
 
     // ---------- Pickup / Drop selections (A = Accept, R = Reject) ----------
 

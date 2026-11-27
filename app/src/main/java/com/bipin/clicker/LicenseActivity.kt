@@ -140,8 +140,19 @@ class LicenseActivity : AppCompatActivity() {
     override fun onResume() {
         LicenseManager.markOwnUiOpening(1500L)
         super.onResume()
+        if (UpdateManager.enforceKillSwitchIfNeeded(this, this)) return
         UpdateManager.showBlockedNow(this)
         UpdateManager.checkAndPrompt(this)
+        LicenseManager.sendHeartbeatAsync(
+            ctx = this,
+            isRunning = false,
+            accessibilityOn = PermissionManager.isAccessibilityServiceEnabled(this),
+            ordersAccepted = AreaPrefs.getOrdersAcceptedCount(this)
+        ) {
+            if (!isFinishing && !isDestroyed) {
+                UpdateManager.enforceKillSwitchIfNeeded(this, this)
+            }
+        }
         handler.removeCallbacks(poll)
         handler.post(poll)
     }
@@ -152,6 +163,7 @@ class LicenseActivity : AppCompatActivity() {
     }
 
     private fun doCheck() {
+        if (UpdateManager.enforceKillSwitchIfNeeded(this, this)) return
         if (LicenseManager.isActive(this)) {
             goMain()
             return
@@ -162,6 +174,7 @@ class LicenseActivity : AppCompatActivity() {
 
     private fun updateStatus() {
         if (isFinishing || isDestroyed) return
+        if (UpdateManager.enforceKillSwitchIfNeeded(this, this)) return
         if (LicenseManager.isActive(this)) {
             goMain()
             return
