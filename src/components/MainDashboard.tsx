@@ -142,21 +142,15 @@ export const MainDashboard: React.FC<MainDashboardProps> = ({
     }
 
     onSimulateWatcherAccept(
-      'ORDER FOUND',
-      'Bottom Pre-Read: MATCHED (0ms cached) -> rising popup tracked -> 45ms TURBO SWIPE'
+      'ORDER UTHA RAHA',
+      `0ms Instant Match -> SWIPE AUTO A DONE 26ms (No Popup Wait) | ${liveAnalysis.reason}`
     );
+    playOrderSound();
     setScanAnimActive(true);
-    window.setTimeout(() => {
-      onSimulateWatcherAccept(
-        'ORDER UTHA RAHA',
-        `SWIPE AUTO A DONE 45ms | ${liveAnalysis.reason}`
-      );
-      playOrderSound();
-    }, 45);
     window.setTimeout(() => {
       setScanAnimActive(false);
       onSimulateWatcherAccept('READY', `Last order accepted: ${liveAnalysis.reason}`);
-    }, 380);
+    }, 260);
   };
 
   return (

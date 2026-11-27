@@ -33,22 +33,21 @@ class OrderWatcherService : AccessibilityService() {
         @Volatile
         var instance: OrderWatcherService? = null
 
-        private const val FAST_RETRY_MS = 18L
+        private const val FAST_RETRY_MS = 8L
         private const val FAST_RETRY_WINDOW_MS = 900L
-        private const val RISE_WATCH_MS = 4L
-        private const val RISE_MAX_WAIT_MS = 45L
-        private const val CLICK_COOLDOWN_MS = 20L
-        private const val OCR_INTERVAL_MS = 280L
-        private const val OCR_TURBO_INTERVAL_MS = 35L
+        private const val RISE_WATCH_MS = 2L
+        private const val CLICK_COOLDOWN_MS = 12L
+        private const val OCR_INTERVAL_MS = 110L
+        private const val OCR_TURBO_INTERVAL_MS = 20L
         // Ek order (popup) par fast retry limit
         private const val MAX_TRIES_PER_POPUP = 4
-        // Swipe duration (ms): 20ms ultra-fast full swipe
-        private const val SWIPE_MS = 20L
+        // Swipe duration (ms): 26ms ultra-fast full swipe with multi-point path (first-try reliable on 60/90/120Hz)
+        private const val SWIPE_MS = 26L
 
         private val COUNTDOWN_STRIP_RE = Regex("accept\\s*in\\s*\\d+\\s*s?", RegexOption.IGNORE_CASE)
         private val ACCEPT_TAIL_RE = Regex("\\|\\s*(?:accept|confirm|take\\s+order).*$", RegexOption.IGNORE_CASE)
 
-        private const val VERIFY_INTERVAL_MS = 35L
+        private const val VERIFY_INTERVAL_MS = 18L
         private const val VERIFY_MAX_ATTEMPTS = 8
 
         private val ACCEPT_WORDS = listOf(
@@ -83,8 +82,6 @@ class OrderWatcherService : AccessibilityService() {
     private var lastActionAt = 0L
     private var lastSignature: String? = null
     private var lastOcrSignature: String? = null
-    private var ocrPreMatchSig: String? = null
-    private var ocrPreMatchFirstAt = 0L
     private var turboOcrUntil = 0L
     private var lastPreMatch: PreMatchEntry? = null
 
@@ -92,6 +89,11 @@ class OrderWatcherService : AccessibilityService() {
 
     // FIX: scan throttle + gesture overlap guard + debug spam guard
     private var lastScanAt = 0L
+    private var pendingScanScheduled = false
+    private val pendingScanRunnable = Runnable {
+        pendingScanScheduled = false
+        scanNow(forceImmediate = true)
+    }
     private val ocrLock = Any()
     @Volatile private var ocrBusy = false
     private var lastOcrHeartbeat = 0L
@@ -176,24 +178,24 @@ class OrderWatcherService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (LicenseManager.isOwnUiOpening()) return
+        val evPkg = event.packageName?.toString()
+        if (isIgnoredPackage(evPkg)) return
+        if (evPkg == packageName) return
+        if (LicenseManager.isOwnUiOpening() && isOwnAppInForeground()) return
         if (!PermissionManager.isEverythingReady(applicationContext)) {
             if (!AreaPrefs.isPaused(applicationContext)) AreaPrefs.setPaused(applicationContext, true)
             return
         }
         if (AreaPrefs.isPaused(applicationContext)) return
         if (!LicenseManager.isActive(applicationContext)) return
-        // Apne app ya keyboard typing events par scan mat chalao (lag bachane ke liye)
-        val evPkg = event.packageName?.toString()
-        if (isIgnoredPackage(evPkg)) return
-        if (evPkg == packageName) return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> scanNow(forceImmediate = true)
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_SCROLLED,
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> scanNow(forceImmediate = true)
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
             AccessibilityEvent.TYPE_VIEW_CLICKED -> scanNow(forceImmediate = false)
             else -> Unit
         }
@@ -216,15 +218,26 @@ class OrderWatcherService : AccessibilityService() {
     }
 
     private fun scanNow(forceImmediate: Boolean = false) {
-        if (LicenseManager.isOwnUiOpening()) return
+        if (LicenseManager.isOwnUiOpening() && isOwnAppInForeground()) return
         if (!LicenseManager.isActive(applicationContext)) return
         if (!PermissionManager.isEverythingReady(applicationContext)) return
         if (AreaPrefs.isPaused(applicationContext)) return
 
         val tNow = SystemClock.uptimeMillis()
         val hasWarmMatch = lastPreMatch?.let { it.matched && (tNow - it.lastSeenUptime) < 1200L } == true
-        val minInterval = if (forceImmediate || hasWarmMatch) 0L else 16L
-        if (minInterval > 0L && tNow - lastScanAt < minInterval) return
+        val minInterval = if (forceImmediate || hasWarmMatch) 0L else 8L
+        if (minInterval > 0L && tNow - lastScanAt < minInterval) {
+            // Kabhi bhi event drop mat karo — 4ms me ek trailing scan schedule karo
+            if (!pendingScanScheduled) {
+                pendingScanScheduled = true
+                handler.postDelayed(pendingScanRunnable, 4L)
+            }
+            return
+        }
+        if (pendingScanScheduled) {
+            pendingScanScheduled = false
+            handler.removeCallbacks(pendingScanRunnable)
+        }
         lastScanAt = tNow
 
         val roots = currentRoots()
@@ -292,26 +305,17 @@ class OrderWatcherService : AccessibilityService() {
 
                 if (!hasAccept) continue
 
-                setStatus("ORDER FOUND")
-
                 val now = System.currentTimeMillis()
                 if (verifyAttemptsLeft > 0 && signature == lastSignature) {
                     continue
                 }
 
-                // Rising/scaling check: agar popup abhi chhota hai ya neeche se tez upar aa raha hai,
-                // to bina dobara text padhe 4ms me upar pahunchte hi TURBO swipe maaro!
-                if (shouldWaitForRise(acceptNodes, entry, tNow)) {
-                    startRiseWatch()
-                    continue
-                }
-
+                // 0ms Instant Swipe: popup aate hi ek bhi millisecond ruke bina turant swipe maaro!
                 val isNewOrder = signature != lastSignature
                 if (isNewOrder) {
-                    // Har naye order par pehli koshish hamesha 20ms TURBO style A se ho!
                     swipeTry = 0
                 }
-                val sameOrderCooldownOk = isNewOrder || (now - treeDoneAt > 200L)
+                val sameOrderCooldownOk = isNewOrder || (now - treeDoneAt > 60L)
                 if (sameOrderCooldownOk && (isNewOrder || now - lastActionAt >= CLICK_COOLDOWN_MS)) {
                     if (acceptFromNodes(acceptNodes) || findAndAccept(root)) {
                         treeDoneAt = now
@@ -319,9 +323,9 @@ class OrderWatcherService : AccessibilityService() {
                         lastActionAt = now
                         riseWatchRunning = false
                         turboOcrUntil = 0L
-                        setStatus("ORDER UTHA RAHA")
-                        reportDebug("ORDER UTHA RAHA - 20ms TURBO swipe bheja")
                         startVerifyRetry()
+                        setStatus("ORDER UTHA RAHA")
+                        reportDebug("ORDER UTHA RAHA - 0ms instant TURBO swipe bheja")
                     } else {
                         reportDebug("Accept control nahi mila - fast retry chal raha hai")
                         startFastRetry()
@@ -333,65 +337,6 @@ class OrderWatcherService : AccessibilityService() {
                 try { root.recycle() } catch (_: Exception) {}
             }
         }
-    }
-
-    private fun shouldWaitForRise(
-        acceptNodes: List<AccessibilityNodeInfo>,
-        entry: PreMatchEntry,
-        tNow: Long
-    ): Boolean {
-        val elapsed = tNow - entry.firstSeenUptime
-        if (elapsed >= RISE_MAX_WAIT_MS) return false
-        val primary = acceptNodes.firstOrNull() ?: return false
-        val sliderContainer = findSliderLikeAncestor(primary)
-        val sliderNode = sliderContainer ?: primary
-        val r = Rect()
-        try {
-            sliderNode.getBoundsInScreen(r)
-        } catch (_: Exception) {
-            return false
-        }
-        if (r.isEmpty) return false
-
-        val dm = resources.displayMetrics
-        val screenW = dm.widthPixels.toFloat()
-        val screenH = dm.heightPixels.toFloat()
-        val curY = r.exactCenterY()
-        val curW = r.width()
-        val prevY = entry.lastSliderCenterY
-        entry.lastSliderCenterY = curY
-        entry.lastSliderWidth = curW
-
-        // Agar slider container nahi mila (sirf chhota text node mila), to width par wait mat karo;
-        // warna text node <42% hone ki wajah se 40ms bekaar wait ho jata!
-        if (sliderContainer == null) {
-            if (curY > screenH * 0.72f) {
-                entry.stableFrames = 0
-                return true
-            }
-            entry.stableFrames++
-            return false
-        }
-
-        // Popup upar/beech me poori width ke saath aa chuka hai -> 0ms wait, turant swipe!
-        if (curW >= screenW * 0.48f && curY <= screenH * 0.65f) {
-            entry.stableFrames++
-            return false
-        }
-
-        // Sirf jab popup abhi scale-in ho raha ho (<42% width) ya neeche bottom (>72% height) par ho
-        if (curW < screenW * 0.42f || curY > screenH * 0.72f) {
-            entry.stableFrames = 0
-            return true
-        }
-
-        if (prevY > 0f && (prevY - curY) > 18f && curY > screenH * 0.60f) {
-            entry.stableFrames = 0
-            return true
-        }
-
-        entry.stableFrames++
-        return false
     }
 
     private val riseWatchRunnable = object : Runnable {
@@ -430,7 +375,7 @@ class OrderWatcherService : AccessibilityService() {
                 return
             }
             if (SystemClock.uptimeMillis() < slideInFlightUntil) {
-                handler.postDelayed(this, 25L)
+                handler.postDelayed(this, 10L)
                 return
             }
             if (verifyAttemptsLeft-- <= 0) {
@@ -729,10 +674,10 @@ class OrderWatcherService : AccessibilityService() {
             return
         }
         if (verifyAttemptsLeft > 0 ||
-            System.currentTimeMillis() - lastActionAt < 220L ||
+            System.currentTimeMillis() - lastActionAt < 90L ||
             SystemClock.uptimeMillis() < slideInFlightUntil
         ) {
-            scheduleNextOcr(80L)
+            scheduleNextOcr(25L)
             return
         }
         val pm = getSystemService(PowerManager::class.java)
@@ -743,7 +688,7 @@ class OrderWatcherService : AccessibilityService() {
 
         synchronized(ocrLock) {
             if (ocrBusy) {
-                scheduleNextOcr(80L)
+                scheduleNextOcr(25L)
                 return
             }
             ocrBusy = true
@@ -756,8 +701,8 @@ class OrderWatcherService : AccessibilityService() {
                     if (err != null && !isRateLimited) reportDebug("OCR: $err")
                     val turboActive = SystemClock.uptimeMillis() < turboOcrUntil
                     val delay = when {
-                        isRateLimited && turboActive -> 25L
-                        isRateLimited -> 45L
+                        isRateLimited && turboActive -> 18L
+                        isRateLimited -> 28L
                         else -> nextOcrDelayMs()
                     }
                     scheduleNextOcr(delay)
@@ -843,24 +788,7 @@ class OrderWatcherService : AccessibilityService() {
         if (verifyAttemptsLeft > 0) return
         val nowT = System.currentTimeMillis()
         val bmpW = res.bitmap.width.toFloat()
-        val bmpH = res.bitmap.height.toFloat()
         val slider = ScreenOcrScanner.estimateSlider(res.bitmap, acceptLine.box)
-
-        // Agar popup abhi chhota ya neeche animation me hai -> OCR se pehle hi pre-match kar ke
-        // 4ms Accessibility + 35ms Turbo OCR watch chalu karo; bada hote hi 0ms me 20ms swipe!
-        if (matchedSig != ocrPreMatchSig || nowT - ocrPreMatchFirstAt > 1800L) {
-            ocrPreMatchSig = matchedSig
-            ocrPreMatchFirstAt = nowT
-        }
-        val isStillSmall = slider != null && slider.width() < bmpW * 0.44f
-        val isLowBottom = acceptLine.box.exactCenterY() > bmpH * 0.72f
-        if ((isStillSmall || isLowBottom) && (nowT - ocrPreMatchFirstAt) < 75L) {
-            turboOcrUntil = hb + 600L
-            startRiseWatch()
-            setStatus("ORDER PRE-MATCHED")
-            reportDebug("OCR: Chhota popup padh liya, bada hote hi 20ms swipe")
-            return
-        }
 
         if (matchedSig != lastOcrSignature || nowT - ocrLastSeenAt > 1800L) {
             lastOcrSignature = matchedSig
@@ -874,24 +802,24 @@ class OrderWatcherService : AccessibilityService() {
         if (nowT - lastActionAt < CLICK_COOLDOWN_MS) return
         if (SystemClock.uptimeMillis() < slideInFlightUntil) return
 
-        setStatus("ORDER FOUND")
+        // 0ms Instant Swipe: OCR me Accept dikhte hi bina kisi wait ke turant swipe!
         ocrAttempts++
-        val ok = if (slider != null && slider.width() >= bmpW * 0.44f) {
+        val ok = if (slider != null && slider.width() >= bmpW * 0.35f) {
             val h = slider.height().toFloat()
             val thumbX = ScreenOcrScanner.findThumbCenterX(res.bitmap, slider)?.toFloat()
-                ?: (slider.left + maxOf(h * 0.72f, slider.width() * 0.16f))
+                ?: (slider.left + maxOf(h * 0.55f, slider.width() * 0.14f))
             slideGesture(
                 thumbX,
                 slider.exactCenterY(),
-                slider.right - h * 0.20f,
+                slider.right - h * 0.16f,
                 "SLIDER pixel se, try $ocrAttempts"
             )
         } else {
-            // Safed (>>) circle screen width ~21% par aur right end ~89% par hota hai
+            // Safed (>>) circle screen width ~20% par aur right end ~90% par hota hai
             slideGesture(
-                bmpW * 0.21f,
+                bmpW * 0.20f,
                 acceptLine.box.exactCenterY(),
-                bmpW * 0.89f,
+                bmpW * 0.90f,
                 "TEXT-y se, try $ocrAttempts"
             )
         }
@@ -1011,15 +939,15 @@ class OrderWatcherService : AccessibilityService() {
 
         val thumb = findThumbChild(target, bounds)
         val thumbCenterX = thumb?.centerX()?.toFloat()
-            ?: (bounds.left + maxOf(bounds.height() * 0.72f, bounds.width() * 0.16f))
+            ?: (bounds.left + maxOf(bounds.height() * 0.55f, bounds.width() * 0.14f))
         val thumbCenterY = thumb?.centerY()?.toFloat()
             ?: bounds.centerY().toFloat()
 
         val startX = thumbCenterX.coerceIn(
-            bounds.left + bounds.height() * 0.35f,
-            bounds.left + bounds.width() * 0.42f
+            bounds.left + bounds.height() * 0.28f,
+            bounds.left + bounds.width() * 0.40f
         )
-        val endX = (bounds.right - bounds.height() * 0.28f).toFloat()
+        val endX = (bounds.right - bounds.height() * 0.20f).toFloat()
         val y = thumbCenterY.coerceIn(
             bounds.top + bounds.height() * 0.25f,
             bounds.bottom - bounds.height() * 0.25f
@@ -1097,14 +1025,14 @@ class OrderWatcherService : AccessibilityService() {
         val t0 = SystemClock.uptimeMillis()
         val expectedMs = when (style) {
             0 -> SWIPE_MS
-            1 -> 30L
-            2 -> 45L
+            1 -> 34L
+            2 -> 42L
             else -> 55L
         }
-        slideInFlightUntil = t0 + expectedMs + 45L
+        slideInFlightUntil = t0 + expectedMs + 12L
 
         fun fin(ok: Boolean, what: String) {
-            slideInFlightUntil = SystemClock.uptimeMillis() + 5L
+            slideInFlightUntil = SystemClock.uptimeMillis() + 2L
             lastSwipeResult = "$tag ${if (ok) "DONE" else what}"
             reportDebug("SWIPE $lastSwipeResult ${SystemClock.uptimeMillis() - t0}ms\n$info")
             if (ok) SoundPlayer.playOrderSound(applicationContext)
@@ -1112,11 +1040,13 @@ class OrderWatcherService : AccessibilityService() {
 
         fun single(durationMs: Long, toX: Float): Boolean {
             val endPos = toX.coerceAtMost(maxX)
+            val dx = endPos - startX
             val path = Path().apply {
                 moveTo(startX, y)
                 lineTo(startX + 4f, y)
-                lineTo(startX + (endPos - startX) * 0.35f, y)
-                lineTo(startX + (endPos - startX) * 0.72f, y)
+                lineTo(startX + dx * 0.18f, y)
+                lineTo(startX + dx * 0.42f, y)
+                lineTo(startX + dx * 0.70f, y)
                 lineTo(endPos, y)
             }
             return dispatchGesture(
@@ -1167,8 +1097,8 @@ class OrderWatcherService : AccessibilityService() {
         val dispatched = try {
             when (style) {
                 0 -> single(SWIPE_MS, overshoot)
-                1 -> single(30L, overshoot)
-                2 -> chain2(10L, 35L, overshoot)
+                1 -> single(34L, overshoot)
+                2 -> chain2(8L, 34L, overshoot)
                 else -> single(55L, overshoot)
             }
         } catch (e: Exception) {
@@ -1323,17 +1253,18 @@ class OrderWatcherService : AccessibilityService() {
     }
 
     private fun reportDebug(message: String) {
-        // FIX: har 100ms par overlay + notification update karne se system throttle karta tha
-        // aur main thread bhari ho jata tha.
+        // FIX: UI/Notification Binder IPC ko post karke hot accept path ko 0ms lag-free rakho
         val now = SystemClock.uptimeMillis()
         if (message == lastReportMsg && now - lastReportAt < 1500L) return
         if (message.startsWith("Scan (") && now - lastReportAt < 1000L) return
         lastReportMsg = message
         lastReportAt = now
         val full = if (lastSwipeResult != "-" && !message.startsWith("SWIPE")) "$message\n[last: $lastSwipeResult]" else message
-        DebugOverlay.update(this, full)
-        if (!message.startsWith("OCR chal raha hai") && !message.startsWith("Scan (")) {
-            updateStatusNotification(full)
+        handler.post {
+            DebugOverlay.update(this, full)
+            if (!message.startsWith("OCR chal raha hai") && !message.startsWith("Scan (")) {
+                updateStatusNotification(full)
+            }
         }
     }
 
